@@ -3,6 +3,7 @@ from itertools import product
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import curve_fit
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 import matplotlib
@@ -43,6 +44,19 @@ def apply_imc(x, tempset):
     except:
         return x.E_ROE
 
+def term_spread_adj(x, df):
+
+    currYear = int(x[-6:-2])
+    code = str(x[:7])
+    prev_data = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 2))]
+
+    if len(prev_data) < 10:
+        df['spread'] = 0
+    else:
+        popt, pcov = curve_fit(term_spread, prev_data.DBtw, prev_data.Error)
+        df['spread'] = term_spread(df.DBtw, popt[0], popt[1])
+
+    return df.E_ROE - df.spread
 
 def EW_adp(x):
 
@@ -50,24 +64,10 @@ def EW_adp(x):
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
 
-    currYear = int(x[-6:-2])
-    code = str(x[:7])
-    prev_data = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 3))]
-    if len(prev_data.Year.unique()) < 3:
-        slope, intercept = None, None
-        #slope = None
-    else:
-        slope, intercept = np.polyfit(prev_data.theta, prev_data.Error, 1)
-        #slope = np.linalg.lstsq(prev_data.theta.values.reshape(-1,1), prev_data.Error.values, rcond=None)[0][0]
+    df['E_ROE'] = term_spread_adj(symbol, df)
 
-    if slope is not None:
-        df['E_ROE_adj'] = df.E_ROE - (df['theta'] * slope + intercept)
-        #df['E_ROE_adj'] = df.E_ROE - df['theta'] * slope
-        data = df.groupby('QBtw')['E_ROE_adj'].mean() - df.groupby('QBtw')['A_ROE'].mean()
-        data_std = df.groupby('QBtw')['E_ROE_adj'].std()
-    else:
-        data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
-        data_std = df.groupby('QBtw')['E_ROE'].std()
+    data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
+    data_std = df.groupby('QBtw')['E_ROE'].std()
 
     fulldata = pd.DataFrame(
         {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
@@ -76,13 +76,15 @@ def EW_adp(x):
     return fulldata
 
 
-def PBest(x):
+def PBest_adp(x):
 
     symbol = x[0]
     star_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+    df['E_ROE'] = term_spread_adj(symbol, df)
+
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
     tempset = []
@@ -129,13 +131,15 @@ def PBest(x):
     return fulldata
 
 
-def IMSE(x):
+def IMSE_adp(x):
 
     symbol = x[0]
     min_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+    df['E_ROE'] = term_spread_adj(symbol, df)
+
     unique_sec = df.Security.unique()
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year == str(int(df.Year.iloc[0]) - 1))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
@@ -184,7 +188,7 @@ def IMSE(x):
     return fulldata
 
 
-def BAM(x):
+def BAM_adp(x):
 
     symbol = x[0]
     min_count = x[1]
@@ -192,6 +196,8 @@ def BAM(x):
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+    df['E_ROE'] = term_spread_adj(symbol, df)
+
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
 
@@ -238,7 +244,7 @@ def BAM(x):
     return fulldata
 
 
-def BAM_adj(x):
+def BAM_adj_adp(x):
     '''
     same as BAM, but with individual's forecast
     :param x: index
@@ -251,6 +257,8 @@ def BAM_adj(x):
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+    df['E_ROE'] = term_spread_adj(symbol, df)
+
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
 
@@ -295,7 +303,7 @@ def BAM_adj(x):
 
     return fulldata
 
-def IMC(x):
+def IMC_adp(x):
     '''
     Iterated Mean Combination
     :param x:
@@ -310,6 +318,7 @@ def IMC(x):
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
+    df['E_ROE'] = term_spread_adj(symbol, df)
 
     tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['Code', 'E_ROE', 'Security', 'Year','QBtw'])
@@ -393,7 +402,7 @@ def IMC(x):
     return fulldata
 
 
-def PBIMC(x):
+def PBIMC_adp(x):
     '''
     Iterated Mean Combination
     :param x:
@@ -409,6 +418,7 @@ def PBIMC(x):
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
+    df['E_ROE'] = term_spread_adj(symbol, df)
 
     tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['Code', 'E_ROE', 'Security', 'Year','QBtw'])
@@ -536,7 +546,7 @@ train['QBtw'] = (train.DBtw / 90).astype(int)
 #train['theta'] = (1 / (1 + np.exp(-train.DBtw/90)) - 0.5)
 
 def term_spread(x, k, t):
-    return k / (1 + np.exp(-x/t)) - 0.5
+    return k * (1 / (1 + np.exp(-x/t)) - 0.5)
 
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
@@ -551,34 +561,34 @@ if __name__ == '__main__':
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)
+    print('EW', '\n', MSFE_result)
 
 
-    '''# (2) smart consensus
+    # (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [star_count]))
 
-    dataset = process_map(PBest, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(PBest_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)'''
+    print('PBest', '\n', MSFE_result)
 
 
-    '''# (3) Inverse MSE (IMSE)
+    # (3) Inverse MSE (IMSE)
     min_count = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
 
-    dataset = process_map(IMSE, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(IMSE_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)
+    print('IMSE', '\n', MSFE_result)
 
 
     # (4) Bias-Adjusted Mean (BAM)
@@ -587,12 +597,12 @@ if __name__ == '__main__':
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
 
-    dataset = process_map(BAM, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)
+    print('BAM', '\n', MSFE_result)
 
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
@@ -601,12 +611,12 @@ if __name__ == '__main__':
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
 
-    dataset = process_map(BAM_adj, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(BAM_adj_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)
+    print('BAM_adj', '\n', MSFE_result)
 
 
     # (6) Iterated Mean Combination (IMC)
@@ -615,12 +625,12 @@ if __name__ == '__main__':
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
 
-    dataset = process_map(IMC, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(IMC_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)
+    print('IMC', '\n', MSFE_result)
 
 
     # (7) Privious Best Iterated Mean Combination (PBIMC)
@@ -630,12 +640,12 @@ if __name__ == '__main__':
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [min_year], [star_count]))
 
-    dataset = process_map(PBIMC, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(PBIMC_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)'''
+    print('PBIMC', '\n', MSFE_result)
 
 # equation should be y = AVG( x * q(t) ) + b
 # where q(t) = k / ( 1 + exp(-(t - t0)) )
