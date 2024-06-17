@@ -44,13 +44,31 @@ def apply_imc(x, tempset):
         return x.E_ROE
 
 
-def EW(x):
+def EW_adp(x):
 
     symbol = x
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
-    data_std = df.groupby('QBtw')['E_ROE'].std()
+
+    currYear = int(x[-6:-2])
+    code = str(x[:7])
+    prev_data = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 3))]
+    if len(prev_data.Year.unique()) < 3:
+        slope, intercept = None, None
+        #slope = None
+    else:
+        slope, intercept = np.polyfit(prev_data.theta, prev_data.Error, 1)
+        #slope = np.linalg.lstsq(prev_data.theta.values.reshape(-1,1), prev_data.Error.values, rcond=None)[0][0]
+
+    if slope is not None:
+        df['E_ROE_adj'] = df.E_ROE - (df['theta'] * slope + intercept)
+        #df['E_ROE_adj'] = df.E_ROE - df['theta'] * slope
+        data = df.groupby('QBtw')['E_ROE_adj'].mean() - df.groupby('QBtw')['A_ROE'].mean()
+        data_std = df.groupby('QBtw')['E_ROE_adj'].std()
+    else:
+        data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
+        data_std = df.groupby('QBtw')['E_ROE'].std()
+
     fulldata = pd.DataFrame(
         {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
     )
@@ -515,18 +533,25 @@ train['EDate'] = pd.to_datetime((train.Year.astype(int) + 1).astype(str) + '-03-
 train['DBtw'] = (train.EDate - pd.to_datetime(train.Date)).dt.days
 train['QBtw'] = (train.DBtw / 90).astype(int)
 
+#train['theta'] = (1 / (1 + np.exp(-train.DBtw/90)) - 0.5)
+
+def term_spread(x, k, t):
+    return k / (1 + np.exp(-x/t)) - 0.5
+
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
-    '''# (1) simple average
+    # (1) simple average
     dataset = []
 
-    dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
+    #for symbol in tqdm(UniqueSymbol):
+    #    dataset.append(EW_adp(symbol))
+    dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)'''
+    print(MSFE_result)
 
 
     '''# (2) smart consensus
