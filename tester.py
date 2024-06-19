@@ -25,7 +25,7 @@ def search_prev(x, df):
 
 def apply_inv(x):
     try:
-        return x.pow(-1)
+        return x**(-1)
     except:
         return x
 
@@ -65,7 +65,9 @@ def PBest(x):
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
     tempset = []
 
@@ -119,7 +121,8 @@ def IMSE(x):
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     unique_sec = df.Security.unique()
-    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year == str(int(df.Year.iloc[0]) - 1))]
+    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
     tempset = []
 
@@ -170,11 +173,11 @@ def BAM(x):
 
     symbol = x[0]
     min_count = x[1]
-    min_year = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
+    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
 
     if len(tempdata) > min_count:
@@ -229,11 +232,11 @@ def BAM_adj(x):
 
     symbol = x[0]
     min_count = x[1]
-    min_year = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
+    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
 
     if len(tempdata) > min_count:
@@ -286,14 +289,14 @@ def IMC(x):
 
     symbol = x[0]
     min_count = x[1]
-    min_year = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
 
-    tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
+    tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['Code', 'E_ROE', 'Security', 'Year','QBtw'])
 
     # calculate error rate by analyst
@@ -327,7 +330,8 @@ def IMC(x):
     else:
         SQ_df = pd.DataFrame()
 
-    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
+    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
     # calculate error rate by company
@@ -384,15 +388,15 @@ def PBIMC(x):
 
     symbol = x[0]
     min_count = x[1]
-    min_year = x[2]
-    star_count = x[3]
+    star_count = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
 
-    tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
+    tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['Code', 'E_ROE', 'Security', 'Year','QBtw'])
 
     # calculate error rate by analyst
@@ -426,7 +430,8 @@ def PBIMC(x):
     else:
         SQ_df = pd.DataFrame()
 
-    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
+    tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    tempdata = tempdata[~((tempdata.QBtw >= 4) & (tempdata.Year == str(int(df.Year.iloc[0]) - 1)))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
     # find best previous forecast
@@ -513,12 +518,17 @@ train['Error'] = train['E_ROE'] - train['A_ROE']
 train['Year'] = train.FY.str.extract(r'(\d{4})')
 train['EDate'] = pd.to_datetime((train.Year.astype(int) + 1).astype(str) + '-03-31')
 train['DBtw'] = (train.EDate - pd.to_datetime(train.Date)).dt.days
-train['QBtw'] = (train.DBtw / 90).astype(int)
+train['YearDiff'] = train.EDate.dt.year - pd.to_datetime(train.Date).dt.year
+train['MonthDiff'] = train.EDate.dt.month - pd.to_datetime(train.Date).dt.month
+train['totalDiff'] = train['YearDiff'] * 12 + train['MonthDiff']
+train['QBtw'] = (train['totalDiff'] / 3).astype(int)
+
+train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
 
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
-    '''# (1) simple average
+    # (1) simple average
     dataset = []
 
     dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
@@ -526,10 +536,10 @@ if __name__ == '__main__':
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)'''
+    print(MSFE_result)
 
 
-    '''# (2) smart consensus
+    # (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
@@ -540,10 +550,10 @@ if __name__ == '__main__':
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)'''
+    print(MSFE_result)
 
 
-    '''# (3) Inverse MSE (IMSE)
+    # (3) Inverse MSE (IMSE)
     min_count = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -558,9 +568,8 @@ if __name__ == '__main__':
 
     # (4) Bias-Adjusted Mean (BAM)
     min_count = 3
-    min_year = 3
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
+    multi_arg = list(product(UniqueSymbol, [min_count]))
 
     dataset = process_map(BAM, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -572,9 +581,8 @@ if __name__ == '__main__':
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 3
-    min_year = 3
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
+    multi_arg = list(product(UniqueSymbol, [min_count]))
 
     dataset = process_map(BAM_adj, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -586,9 +594,8 @@ if __name__ == '__main__':
 
     # (6) Iterated Mean Combination (IMC)
     min_count = 3
-    min_year = 3
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
+    multi_arg = list(product(UniqueSymbol, [min_count]))
 
     dataset = process_map(IMC, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -600,17 +607,16 @@ if __name__ == '__main__':
 
     # (7) Privious Best Iterated Mean Combination (PBIMC)
     min_count = 3
-    min_year = 3
     star_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count], [min_year], [star_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [star_count]))
 
     dataset = process_map(PBIMC, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print(MSFE_result)'''
+    print(MSFE_result)
 
 # equation should be y = AVG( x * q(t) ) + b
 # where q(t) = k / ( 1 + exp(-(t - t0)) )

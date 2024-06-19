@@ -14,6 +14,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
+def term_spread(x, k, t):
+    return k * (1 / (1 + np.exp(-x/t)) - 0.5)
+
+
 def search_prev(x, df):
     try:
         if df.loc[x.QBtw][-1] == 1:
@@ -24,9 +28,29 @@ def search_prev(x, df):
         return None
 
 
+def avg_by_unique_sec(df, column='E_ROE', weight_column=None, method='simple'):
+    result = []
+    prev = None
+    for Q in df.QBtw.unique():
+        temp = df[df.QBtw >= Q]
+        temp = temp.drop_duplicates(subset=['Security'], keep='last')
+        if len(temp) > 0:
+            if method == 'simple':
+                prev = temp[column].mean()
+            elif method == 'weighted':
+                prev = (temp[column] * (10 - temp.QBtw)).sum() / (10 - temp.QBtw).sum()
+            elif method == 'custom_weighted':
+                prev = (temp[column] * temp[weight_column]).sum() / temp[weight_column].sum()
+            result.append([Q, prev])
+        else:
+            result.append([Q, prev])
+
+    return pd.DataFrame(result, columns=['QBtw', 'E_ROE']).set_index('QBtw')
+
+
 def apply_inv(x):
     try:
-        return x.pow(-1)
+        return x**(-1)
     except:
         return x
 
@@ -44,33 +68,43 @@ def apply_imc(x, tempset):
     except:
         return x.E_ROE
 
-def term_spread_adj(x, df):
+
+def term_spread_adj(x):
 
     currYear = int(x[-6:-2])
     code = str(x[:7])
-    prev_data = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 2))]
+    prev_data_bf = train[(train.Code == code) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 3))]
+    prev_data_af = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 2))]
 
-    if len(prev_data) < 10:
-        df['spread'] = 0
+    # case for data which announced before previous year's actual data
+    if len(prev_data_bf) < 10:
+        popt_bf = np.array([0, 1])
     else:
-        popt, pcov = curve_fit(term_spread, prev_data.DBtw, prev_data.Error)
-        df['spread'] = term_spread(df.DBtw, popt[0], popt[1])
+        popt_bf, _ = curve_fit(term_spread, prev_data_bf.DBtw, prev_data_bf.Error)
 
-    return df.E_ROE - df.spread
+    # case for data which announced after previous year's actual data
+    if len(prev_data_af) < 10:
+        popt_af = np.array([0, 1])
+    else:
+        popt_af, _ = curve_fit(term_spread, prev_data_af.DBtw, prev_data_af.Error)
+
+    return popt_bf, popt_af
+
 
 def EW_adp(x):
 
     symbol = x
     df = train[train.UniqueSymbol == symbol]
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
 
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    popt_bf, popt_af = term_spread_adj(symbol)
+    df['E_ROE'] = df['E_ROE'] - df.apply(lambda x: term_spread(x.DBtw, *popt_bf) if x.Date<=x.CutDate else term_spread(x.DBtw, *popt_af), axis=1)
+    dfexp = avg_by_unique_sec(df, method='weighted')
 
-    data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
+    data = dfexp - df['A_ROE'].iloc[0]
     data_std = df.groupby('QBtw')['E_ROE'].std()
 
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.E_ROE.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
     )
 
     return fulldata
@@ -82,43 +116,41 @@ def PBest_adp(x):
     star_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    popt_bf, popt_af = term_spread_adj(symbol)
+    df['E_ROE'] = df['E_ROE'] - df.apply(lambda x: term_spread(x.DBtw, *popt_bf) if x.Date<=x.CutDate else term_spread(x.DBtw, *popt_af), axis=1)
 
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
-    tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
-    tempset = []
+    tempdata['E_ROE'] = tempdata['E_ROE'] - term_spread(tempdata['DBtw'], *popt)
+    tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
-    unique_sec = df.Security.unique()
-    # calculate previous year's error rate by analyst(generalized as house)
-    for sec in unique_sec:
-        df_sec = tempdata[tempdata.Security == sec]
-        if len(df_sec) > 0:
-            df_sec_error = df_sec.groupby('QBtw')['Error'].apply(lambda x: x.abs().mean())
-            df_sec_error.name = sec
-            tempset.append(df_sec_error)
-        else:
-            df_sec_error = pd.Series(index=df.QBtw.unique())
-            df_sec_error.name = sec
-            tempset.append(df_sec_error)
+    prev_error = tempdata.groupby('Security')['Error'].apply(lambda x: x.abs().mean())
+    prev_error.name = 'Smart'
 
     # if previous year's data exist, calculate smart consensus
-    if len(tempset) > 0:
-        prev_error = pd.concat(tempset, axis=1)
+    if len(prev_error) > 0:
         # if prev_year's anaylst data is not enough(less than 5 data point), fill with 1
-        for row in prev_error.iterrows():
-            if row[1].count() < 3:
-                prev_error.loc[row[0]] = 1
-            else:
-                # remain only few(star_count) data point from smallest
-                prev_error.loc[row[0]] = prev_error.loc[row[0]].abs().sort_values().iloc[:star_count]
-        df['Smart'] = df.apply(lambda x: search_prev(x, prev_error), axis=1)
-        df = df.dropna(subset='Smart')
-        data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
-        data_std = df.groupby('QBtw')['E_ROE'].std()
-        fulldata = pd.DataFrame(
-            {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
-        )
+        prev_error = prev_error.sort_values().iloc[:star_count]
+        df_smart = df.join(prev_error, on='Security')
+        df_smart = df_smart.dropna(subset='Smart')
+
+        # if there is no Smart Consensus available
+        if len(df_smart) > 0:
+            dfexp = avg_by_unique_sec(df_smart, method='weighted')
+
+            data = dfexp - df_smart['A_ROE'].iloc[0]
+            data_std = df_smart.groupby('QBtw')['E_ROE'].std()
+
+            fulldata = pd.DataFrame(
+                {'QBtw': data.index, 'Error': data.E_ROE.values, 'Std': data_std.values,
+                 'Code': [symbol[:7]] * len(data)}
+            )
+        else:
+            data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
+            data_std = df.groupby('QBtw')['E_ROE'].std()
+
+            fulldata = pd.DataFrame(
+                {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+            )
 
     # else use simple average of all
     else:
@@ -137,44 +169,30 @@ def IMSE_adp(x):
     min_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    popt = term_spread_adj(symbol)
+    df['E_ROE'] = df['E_ROE'] - term_spread(df['DBtw'], *popt)
 
-    unique_sec = df.Security.unique()
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year == str(int(df.Year.iloc[0]) - 1))]
-    tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
-    tempset = []
+    tempdata['E_ROE'] = tempdata['E_ROE'] - term_spread(tempdata['DBtw'], *popt)
+    tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
-    # calculate previous year's error rate by analyst(generalized as house)
-    for sec in unique_sec:
-        df_sec = tempdata[tempdata.Security == sec]
-        if len(df_sec) > 0:
-            df_sec_error = df_sec.groupby('QBtw')['Error'].apply(lambda x: x.pow(2).mean())
-            df_sec_error.name = sec
-            tempset.append(df_sec_error)
+    prev_error = tempdata.groupby('Security')['Error'].apply(lambda x: x.abs().mean())
+    prev_error.name = 'Smart'
 
     # if previous year's data exist, calculate smart consensus
-    if len(tempset) > 0:
-        prev_error = pd.concat(tempset, axis=1)
-        # if prev_year's anaylst data is not enough(less than 5 data point), fill with 1
-        for row in prev_error.iterrows():
-            if row[1].count() < min_count:
-                prev_error.loc[row[0]] = 1
-            else:
-                # remain only few(star_count) data point from smallest
-                prev_error.loc[row[0]] = prev_error.loc[row[0]].abs().sort_values()
-        df['Smart'] = df.apply(lambda x: search_prev(x, prev_error), axis=1)
-        df = df.dropna(subset='Smart')
+    if len(prev_error) > 0:
+        df = df.join(prev_error, on='Security')
+        df_smart = df.dropna(subset='Smart')
 
         # calculate inverse MSE
-        df['ISmart'] = df['Smart'].apply(lambda x: apply_inv(x))
-        df['ME_ROE'] = df['E_ROE'] * df['ISmart']
-        estIMSE = df.groupby(['QBtw'])['ME_ROE'].sum() / df.groupby(['QBtw'])['ISmart'].sum()
+        df_smart['ISmart'] = df_smart['Smart'].apply(lambda x: apply_inv(x))
+        df_smart['CustomWeight'] = df_smart['QBtw'] * df_smart['ISmart']
+        estIMSE = avg_by_unique_sec(df_smart, column='E_ROE', weight_column='CustomWeight', method='custom_weighted')
 
-        data = estIMSE - df.groupby('QBtw')['A_ROE'].mean()
-        data_std = df.groupby('QBtw')['E_ROE'].std()
+        data = estIMSE - df_smart['A_ROE'].iloc[0]
+        data_std = df_smart.groupby('QBtw')['E_ROE'].std()
         fulldata = pd.DataFrame(
-            {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+            {'QBtw': data.index, 'Error': data.E_ROE.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
         )
 
     # else use simple average of all
@@ -195,32 +213,31 @@ def BAM_adp(x):
     min_year = x[2]
 
     df = train[train.UniqueSymbol == symbol]
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    popt = term_spread_adj(symbol)
+    df['E_ROE'] = df['E_ROE'] - term_spread(df['DBtw'], *popt)
 
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
-    tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
+    tempdata['E_ROE'] = tempdata['E_ROE'] - term_spread(tempdata['DBtw'], *popt)
+    tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
     if len(tempdata) > min_count:
 
-        tempset = tempdata.groupby(['QBtw', 'Year'])[['E_ROE', 'A_ROE']].mean()
+        tempset = tempdata.groupby(['Year'])[['E_ROE', 'A_ROE']].mean()
 
-        for Q in df.QBtw.unique():
-            temp = tempset[tempset.index.get_level_values('QBtw') == Q]
-            if len(temp) >= min_count:
-                #Linear Regression between E_ROE and A_ROE
-                randarr = np.random.randint(low=-20, high=20, size=len(temp)) / 10000
-                slope, intercept = np.polyfit(temp['E_ROE'], temp['A_ROE'] - randarr, 1)
-            elif len(temp) == 0:
-                slope = 1
-                intercept = 0
-            else:
-                #If there is less than three data points, slope is 1 and intercept is the difference between E_ROE and A_ROE
-                slope = 1
-                intercept = (temp.A_ROE - temp.E_ROE).mean()
+        if len(tempset) >= min_count:
+            #Linear Regression between E_ROE and A_ROE
+            randarr = np.random.randint(low=-20, high=20, size=len(tempset)) / 10000
+            slope, intercept = np.polyfit(tempset['E_ROE'], tempset['A_ROE'] - randarr, 1)
+        elif len(tempset) == 0:
+            slope = 1
+            intercept = 0
+        else:
+            #If there is less than three data points, slope is 1 and intercept is the difference between E_ROE and A_ROE
+            slope = 1
+            intercept = (tempset.A_ROE - tempset.E_ROE).mean()
 
-            tempset.loc[Q, 'Slope'] = slope
-            tempset.loc[Q, 'Intercept'] = intercept
+        tempset.loc['Slope'] = slope
+        tempset.loc['Intercept'] = intercept
 
         # get Q by Q data
         tempset = tempset.groupby('QBtw').mean()
@@ -257,7 +274,7 @@ def BAM_adj_adp(x):
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    df['E_ROE'] = term_spread_adj(symbol)
 
     tempdata = train[(train.Code == df.Code.iloc[0]) & (train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year','QBtw'])
@@ -318,7 +335,7 @@ def IMC_adp(x):
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    df['E_ROE'] = term_spread_adj(symbol)
 
     tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['Code', 'E_ROE', 'Security', 'Year','QBtw'])
@@ -418,7 +435,7 @@ def PBIMC_adp(x):
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
-    df['E_ROE'] = term_spread_adj(symbol, df)
+    df['E_ROE'] = term_spread_adj(symbol)
 
     tempdata = train[(train.Year <= str(int(df.Year.iloc[0]) - 1)) & (train.Year >= str(int(df.Year.iloc[0]) - min_year))]
     tempdata = tempdata.drop_duplicates(subset=['Code', 'E_ROE', 'Security', 'Year','QBtw'])
@@ -541,12 +558,13 @@ train['Error'] = train['E_ROE'] - train['A_ROE']
 train['Year'] = train.FY.str.extract(r'(\d{4})')
 train['EDate'] = pd.to_datetime((train.Year.astype(int) + 1).astype(str) + '-03-31')
 train['DBtw'] = (train.EDate - pd.to_datetime(train.Date)).dt.days
-train['QBtw'] = (train.DBtw / 90).astype(int)
+train['YearDiff'] = train.EDate.dt.year - pd.to_datetime(train.Date).dt.year
+train['MonthDiff'] = train.EDate.dt.month - pd.to_datetime(train.Date).dt.month
+train['totalDiff'] = train['YearDiff'] * 12 + train['MonthDiff']
+train['QBtw'] = (train['totalDiff'] / 3).astype(int)
+train['CutDate'] = train.Year + '-03-31'
 
 #train['theta'] = (1 / (1 + np.exp(-train.DBtw/90)) - 0.5)
-
-def term_spread(x, k, t):
-    return k * (1 / (1 + np.exp(-x/t)) - 0.5)
 
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
@@ -554,8 +572,6 @@ if __name__ == '__main__':
     # (1) simple average
     dataset = []
 
-    #for symbol in tqdm(UniqueSymbol):
-    #    dataset.append(EW_adp(symbol))
     dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
@@ -564,12 +580,14 @@ if __name__ == '__main__':
     print('EW', '\n', MSFE_result)
 
 
-    # (2) smart consensus
+    '''# (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [star_count]))
 
+    #for arg in tqdm(multi_arg):
+    #    dataset.append(PBest_adp(arg))
     dataset = process_map(PBest_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
@@ -583,20 +601,25 @@ if __name__ == '__main__':
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
 
+    for arg in tqdm(multi_arg):
+        dataset.append(IMSE_adp(arg))
+
     dataset = process_map(IMSE_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print('IMSE', '\n', MSFE_result)
+    print('IMSE', '\n', MSFE_result)'''
 
 
-    # (4) Bias-Adjusted Mean (BAM)
+    ''''# (4) Bias-Adjusted Mean (BAM)
     min_count = 3
     min_year = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [min_year]))
 
+    for arg in tqdm(multi_arg):
+        dataset.append(BAM_adp(arg))
     dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
@@ -645,7 +668,7 @@ if __name__ == '__main__':
     dataset_pd = pd.concat(dataset)
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
-    print('PBIMC', '\n', MSFE_result)
+    print('PBIMC_adp', '\n', MSFE_result)'''
 
 # equation should be y = AVG( x * q(t) ) + b
 # where q(t) = k / ( 1 + exp(-(t - t0)) )
