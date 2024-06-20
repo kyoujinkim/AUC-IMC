@@ -69,15 +69,18 @@ def term_spread_adj(x):
     prev_data_af = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 3))]
 
     # case for data which announced before previous year's actual data
-    if len(prev_data_bf) < 10 or len(prev_data_af) < 10:
+    if len(prev_data_bf) < 10:
         popt_bf = np.array([0, 1])
-        popt_af = np.array([0, 1])
     else:
         popt_bf, _ = curve_fit(term_spread, prev_data_bf.DBtw, prev_data_bf.Error)
+
+    # case for data which announced after previous year's actual data
+    if len(prev_data_af) < 10:
+        popt_af = np.array([0, 1])
+    else:
         popt_af, _ = curve_fit(term_spread, prev_data_af.DBtw, prev_data_af.Error)
 
     return popt_bf, popt_af
-
 
 def EW_adp(x):
 
@@ -131,15 +134,14 @@ def PBest_adp(x):
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
-        if popt_bf[0] == 0:
-            tempdata = tempdata[(tempdata.QBtw == Q)]
-
-        tempdata['E_ROE'] = (tempdata['E_ROE']
-                             - tempdata.apply(lambda x:
-                                              term_spread(x.DBtw, *popt_bf)
-                                              if x.Date <= x.CutDate
-                                              else term_spread(x.DBtw, *popt_af)
-                                              , axis=1))
+        if Q < 4:
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_af), axis=1))
+        else:
+            if popt_bf[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -204,15 +206,14 @@ def IMSE_adp(x):
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
-        if popt_bf[0] == 0:
-            tempdata = tempdata[(tempdata.QBtw == Q)]
-
-        tempdata['E_ROE'] = (tempdata['E_ROE']
-                             - tempdata.apply(lambda x:
-                                              term_spread(x.DBtw, *popt_bf)
-                                              if x.Date <= x.CutDate
-                                              else term_spread(x.DBtw, *popt_af)
-                                              , axis=1))
+        if Q < 4:
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_af), axis=1))
+        else:
+            if popt_bf[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -287,15 +288,14 @@ def BAM_adp(x):
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
-        if popt_bf[0] == 0:
-            tempdata = tempdata[(tempdata.QBtw == Q)]
-
-        tempdata['E_ROE'] = (tempdata['E_ROE']
-                             - tempdata.apply(lambda x:
-                                              term_spread(x.DBtw, *popt_bf)
-                                              if x.Date <= x.CutDate
-                                              else term_spread(x.DBtw, *popt_af)
-                                              , axis=1))
+        if Q < 4:
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_af), axis=1))
+        else:
+            if popt_bf[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -355,15 +355,14 @@ def BAM_adj_adp(x):
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
-        if popt_bf[0] == 0:
-            tempdata = tempdata[(tempdata.QBtw == Q)]
-
-        tempdata['E_ROE'] = (tempdata['E_ROE']
-                             - tempdata.apply(lambda x:
-                                              term_spread(x.DBtw, *popt_bf)
-                                              if x.Date <= x.CutDate
-                                              else term_spread(x.DBtw, *popt_af)
-                                              , axis=1))
+        if Q < 4:
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_af), axis=1))
+        else:
+            if popt_bf[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -427,15 +426,14 @@ def IMC_adp(x):
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
-        if popt_bf[0] == 0:
-            tempdata = tempdata[(tempdata.QBtw == Q)]
-
-        tempdata['E_ROE'] = (tempdata['E_ROE']
-                             - tempdata.apply(lambda x:
-                                              term_spread(x.DBtw, *popt_bf)
-                                              if x.Date <= x.CutDate
-                                              else term_spread(x.DBtw, *popt_af)
-                                              , axis=1))
+        if Q < 4:
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_af), axis=1))
+        else:
+            if popt_bf[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x.DBtw, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         if len(tempdata) > min_count:
