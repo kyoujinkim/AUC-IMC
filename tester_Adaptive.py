@@ -69,15 +69,11 @@ def term_spread_adj(x):
     prev_data_af = train[(train.Code == code) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 3))]
 
     # case for data which announced before previous year's actual data
-    if len(prev_data_bf) < 10:
+    if len(prev_data_bf) < 10 or len(prev_data_af) < 10:
         popt_bf = np.array([0, 1])
-    else:
-        popt_bf, _ = curve_fit(term_spread, prev_data_bf.DBtw, prev_data_bf.Error)
-
-    # case for data which announced after previous year's actual data
-    if len(prev_data_af) < 10:
         popt_af = np.array([0, 1])
     else:
+        popt_bf, _ = curve_fit(term_spread, prev_data_bf.DBtw, prev_data_bf.Error)
         popt_af, _ = curve_fit(term_spread, prev_data_af.DBtw, prev_data_af.Error)
 
     return popt_bf, popt_af
@@ -126,16 +122,17 @@ def PBest_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+
+        if popt_bf[0] == 0:
+            tempdata = tempdata[(tempdata.QBtw == Q)]
 
         tempdata['E_ROE'] = (tempdata['E_ROE']
                              - tempdata.apply(lambda x:
@@ -198,16 +195,17 @@ def IMSE_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+
+        if popt_bf[0] == 0:
+            tempdata = tempdata[(tempdata.QBtw == Q)]
 
         tempdata['E_ROE'] = (tempdata['E_ROE']
                              - tempdata.apply(lambda x:
@@ -280,16 +278,17 @@ def BAM_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+
+        if popt_bf[0] == 0:
+            tempdata = tempdata[(tempdata.QBtw == Q)]
 
         tempdata['E_ROE'] = (tempdata['E_ROE']
                              - tempdata.apply(lambda x:
@@ -347,16 +346,17 @@ def BAM_adj_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+
+        if popt_bf[0] == 0:
+            tempdata = tempdata[(tempdata.QBtw == Q)]
 
         tempdata['E_ROE'] = (tempdata['E_ROE']
                              - tempdata.apply(lambda x:
@@ -418,16 +418,17 @@ def IMC_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
-                             & (train.QBtw == Q)]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
             tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+
+        if popt_bf[0] == 0:
+            tempdata = tempdata[(tempdata.QBtw == Q)]
 
         tempdata['E_ROE'] = (tempdata['E_ROE']
                              - tempdata.apply(lambda x:
