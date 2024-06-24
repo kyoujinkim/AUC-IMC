@@ -45,7 +45,7 @@ def EW(x):
     data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
@@ -69,10 +69,9 @@ def PBest(x):
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 3))
                              & (train.QBtw == Q)]
-            tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         # list to append previous year's error rate by analyst
@@ -103,7 +102,7 @@ def PBest(x):
     data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
@@ -126,10 +125,9 @@ def IMSE(x):
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 3))
                              & (train.QBtw == Q)]
-            tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         # list to append previous year's error rate by analyst
@@ -169,7 +167,7 @@ def IMSE(x):
             - df.groupby('QBtw')['A_ROE'].mean())
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
@@ -193,10 +191,9 @@ def BAM(x):
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 5))
                              & (train.QBtw == Q)]
-            tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         # list to append previous year's error rate by analyst
@@ -221,7 +218,7 @@ def BAM(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
@@ -245,10 +242,9 @@ def BAM_adj(x):
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 5))
                              & (train.QBtw == Q)]
-            tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         # list to append previous year's error rate by analyst
@@ -274,7 +270,7 @@ def BAM_adj(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
@@ -301,10 +297,9 @@ def IMC(x):
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 5))
                              & (train.QBtw == Q)]
-            tempdata = tempdata[~(tempdata.Year == str(int(df.Year.iloc[0]) - 1))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if len(tempdata) > min_count:
@@ -360,13 +355,17 @@ def IMC(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
 
 
-train = pd.read_csv('./data/train.csv', encoding='utf-8-sig')
+train = pd.read_csv('./data/total.csv', encoding='utf-8-sig')
+train = train.dropna()
+train.BPS = train.BPS.astype(float)
+#droprow if BPS is less than 0
+train = train[train.BPS > 0]
 train['UniqueSymbol'] = train['Code'] + train['FY']
 train['E_ROE'] = train['E_EPS(지배)'] / train.BPS
 train['A_ROE'] = train['A_EPS(지배)'] / train.BPS
@@ -386,7 +385,7 @@ train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
-    # (1) simple average
+    '''# (1) simple average
     dataset = []
 
     dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
@@ -395,6 +394,8 @@ if __name__ == '__main__':
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
     print(MSFE_result)
+    dataset_pd.to_csv('./result/EW.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/EW_MSFE.csv', encoding='utf-8-sig')'''
 
 
     # (2) smart consensus
@@ -409,6 +410,8 @@ if __name__ == '__main__':
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
     print(MSFE_result)
+    dataset_pd.to_csv('./result/PBest.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/PBest_MSFE.csv', encoding='utf-8-sig')
 
 
     # (3) Inverse MSE (IMSE)
@@ -422,6 +425,8 @@ if __name__ == '__main__':
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
     print(MSFE_result)
+    dataset_pd.to_csv('./result/IMSE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/IMSE_MSFE.csv', encoding='utf-8-sig')
 
 
     # (4) Bias-Adjusted Mean (BAM)
@@ -435,6 +440,8 @@ if __name__ == '__main__':
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
     print(MSFE_result)
+    dataset_pd.to_csv('./result/BAM.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/BAM_MSFE.csv', encoding='utf-8-sig')
 
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
@@ -448,6 +455,8 @@ if __name__ == '__main__':
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
     print(MSFE_result)
+    dataset_pd.to_csv('./result/BAM_adj.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/BAM_adj_MSFE.csv', encoding='utf-8-sig')
 
 
     # (6) Iterated Mean Combination (IMC)
@@ -461,6 +470,19 @@ if __name__ == '__main__':
     dataset_pd['MSFE'] = dataset_pd.Error ** 2
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MSFE', 'Std']].mean()
     print(MSFE_result)
+    dataset_pd.to_csv('./result/IMC.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/IMC_MSFE.csv', encoding='utf-8-sig')
+
+    #draw 3d surface plot with dataset_pd
+    '''byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()
+    byFY_r = byFY.reset_index()
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot_trisurf(byFY_r.QBtw, byFY_r.FY.str[:4].astype(float), byFY_r.MSFE, cmap='viridis')
+    ax.set_xlabel('QBtw')
+    ax.set_ylabel('FY')
+    ax.set_zlabel('Error')
+    plt.show()'''
 
 
 # equation should be y = AVG( x * q(t) ) + b
