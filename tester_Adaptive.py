@@ -626,7 +626,7 @@ if __name__ == '__main__':
     #MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     #print(MSFE_result)
     #dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
-    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
+    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')'''
 
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
@@ -641,7 +641,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/BAM_adj_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/BAM_adj_adp_MSFE.csv', encoding= 'utf-8-sig')
 
 
     '''# (6) Iterated Mean Combination (IMC)

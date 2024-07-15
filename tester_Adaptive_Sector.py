@@ -1,7 +1,9 @@
+import json
 import os
 from itertools import product
 
 import numpy as np
+from numpy import nan
 import pandas as pd
 from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
@@ -21,13 +23,13 @@ warnings.filterwarnings('ignore')
 #def term_spread(x, k, t1, t2):
 #    return k * ( 1 / ( 1 + np.exp( - (x.DBtw/(365*2) * t1 + x.Gdp/100 * t2) )) - 0.5)
 
-def term_spread(x, b0, b1, l1, l2):
-    return b0 + b1 * ( 1 / ( 1 + np.exp( - (x.DBtw/(365*2) * l1 + x.Gdp/100 * l2) )))
+#def term_spread(x, b0, b1, l1, l2):
+#    return b0 + b1 * ( 1 / ( 1 + np.exp( - (x.DBtw/(365*2) * l1 + x.Gdp/100 * l2) )))
 
 
-#def term_spread(x, b0, b1, b2, c, lam):
-#    theta = x.DBtw / 365 / lam
-#    return b0 + c*x.Gdp/100 + b1 * (1 - np.exp(-theta)) / theta + b2 * ((1-np.exp(-theta)) / theta - np.exp(-theta))
+def term_spread(x, b0, c, b1, b2, lam):
+    theta = x.DBtw / 365 / lam
+    return b0 + c*x.Gdp/100 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
 
 
 def avg_by_unique_sec(df, column='E_ROE', weight_column=None, method='simple'):
@@ -77,6 +79,7 @@ def apply_imc(x, tempset):
 
 def memoize(func):
     def wrapper(*args, **kwargs):
+        global cache_ltable
         if args not in cache_ltable:
             cache_ltable[args] = func(*args, **kwargs)
         return cache_ltable[args]
@@ -96,7 +99,7 @@ def term_spread_adj(sector, year):
         prev_data_bf = train[(train.Sector == sector) & (train.Year <= str(currYear - 2))]# & (train.Year >= str(currYear - 6))]
         prev_data_af = train[(train.Sector == sector) & (train.Year <= str(currYear - 1))]# & (train.Year >= str(currYear - 5))]
 
-    num_of_obs = 4
+    num_of_obs = 5
 
     # case for data which announced before previous year's actual data
     if len(prev_data_bf) < 20:
@@ -107,7 +110,9 @@ def term_spread_adj(sector, year):
                 term_spread
                 , prev_data_bf
                 , prev_data_bf.Error
-                , method='lm'
+                , method='trf'
+                , p0=[0, 0.01, 0.01, 0.01, 1]#b0, c, b1, b2, lam
+                , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf),(1, np.inf, np.inf, np.inf, np.inf))
             )
             if pcov_bf[0,0] == np.inf:
                 raise Exception
@@ -123,30 +128,34 @@ def term_spread_adj(sector, year):
                 term_spread
                 , xdata=prev_data_bf
                 , ydata=prev_data_bf.Error
-                , method='lm'
+                , method='trf'
+                , p0=[0, 0.01, 0.01, 0.01, 1]#b0, c, b1, b2, lam
+                , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf),(1, np.inf, np.inf, np.inf, np.inf))
             )
             if pcov_af[0,0] == np.inf:
                 raise Exception
         except:
             popt_af = np.array([np.nan] * num_of_obs)
 
-    return popt_bf, popt_af
+    return {'popt_bf':popt_bf, 'popt_af':popt_af}
 
 
 def EW_adp(x):
 
     symbol = x
     df = train[train.UniqueSymbol == symbol]
-    year = x[-6:-2]
+    year = symbol[-6:-2]
     sector = df.Sector.iloc[-1]
-    popt_bf, popt_af = term_spread_adj(sector, year)
+    popt = term_spread_adj(sector, year)
+    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
     df['E_ROE'] = (df['E_ROE']
                    - df.apply(lambda x:
                               term_spread(x, *popt_bf)
                               if x.Date <= x.CutDate
                               else term_spread(x, *popt_af)
-                              , axis=1))
+                              , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
 
     data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
@@ -165,13 +174,16 @@ def PBest_adp(x):
     star_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    year = x[-6:-2]
+    year = symbol[-6:-2]
     sector = df.Sector.iloc[-1]
-    popt_bf, popt_af = term_spread_adj(sector, year)
+    popt = term_spread_adj(sector, year)
+    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
+
     df['E_ROE'] = (df['E_ROE']
                    - df.apply(lambda x:
                               term_spread(x, *popt_bf)
-                              if x.Date<=x.CutDate
+                              if x.Date <= x.CutDate
                               else term_spread(x, *popt_af)
                               , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
@@ -238,13 +250,16 @@ def IMSE_adp(x):
     min_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    year = x[-6:-2]
+    year = symbol[-6:-2]
     sector = df.Sector.iloc[-1]
-    popt_bf, popt_af = term_spread_adj(sector, year)
+    popt = term_spread_adj(sector, year)
+    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
+
     df['E_ROE'] = (df['E_ROE']
                    - df.apply(lambda x:
                               term_spread(x, *popt_bf)
-                              if x.Date<=x.CutDate
+                              if x.Date <= x.CutDate
                               else term_spread(x, *popt_af)
                               , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
@@ -321,13 +336,16 @@ def BAM_adp(x):
     min_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    year = x[-6:-2]
+    year = symbol[-6:-2]
     sector = df.Sector.iloc[-1]
-    popt_bf, popt_af = term_spread_adj(sector, year)
+    popt = term_spread_adj(sector, year)
+    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
+
     df['E_ROE'] = (df['E_ROE']
                    - df.apply(lambda x:
                               term_spread(x, *popt_bf)
-                              if x.Date<=x.CutDate
+                              if x.Date <= x.CutDate
                               else term_spread(x, *popt_af)
                               , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
@@ -393,13 +411,16 @@ def BAM_adj_adp(x):
     min_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    year = x[-6:-2]
+    year = symbol[-6:-2]
     sector = df.Sector.iloc[-1]
-    popt_bf, popt_af = term_spread_adj(sector, year)
+    popt = term_spread_adj(sector, year)
+    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
+
     df['E_ROE'] = (df['E_ROE']
                    - df.apply(lambda x:
                               term_spread(x, *popt_bf)
-                              if x.Date<=x.CutDate
+                              if x.Date <= x.CutDate
                               else term_spread(x, *popt_af)
                               , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
@@ -409,12 +430,12 @@ def BAM_adj_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 2))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
@@ -466,15 +487,18 @@ def IMC_adp(x):
     min_count = x[1]
 
     df = train[train.UniqueSymbol == symbol]
-    year = x[-6:-2]
+    year = symbol[-6:-2]
     sector = df.Sector.iloc[-1]
-    popt_bf, popt_af = term_spread_adj(sector, year)
+    popt = term_spread_adj(sector, year)
+    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
+
     df['E_ROE'] = (df['E_ROE']
                    - df.apply(lambda x:
                               term_spread(x, *popt_bf)
-                              if x.Date<=x.CutDate
+                              if x.Date <= x.CutDate
                               else term_spread(x, *popt_af)
-                              , axis=1))
+                              , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
@@ -485,12 +509,12 @@ def IMC_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 2))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
@@ -570,11 +594,6 @@ def IMC_adp(x):
     return fulldata
 
 
-def init_pool(the_list):
-    global shared_cache
-    shared_cache = the_list
-
-
 train = pd.read_csv('./data/total.csv', encoding='utf-8-sig')
 train.BPS = train.BPS.astype(float)
 #droprow if BPS is less than 0
@@ -597,6 +616,18 @@ train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
 train['CutDate'] = train.Year + '-03-31'
 
 cache_ltable = dict()
+# we have no choice but have to update cache_lookup table explicitly
+if os.path.exists('./result/cache_ltable.json'):
+    with open('./result/cache_ltable.json') as f:
+        cache_ltable = json.load(f)
+    cache_ltable = {eval(k): v for k, v in cache_ltable.items()}
+
+else:
+    listoftable = list(product(train.Sector.unique(), train.Year.unique()))
+    for table in tqdm(listoftable):
+        term_spread_adj(*table)
+
+    pd.DataFrame(cache_ltable).to_json('./result/cache_ltable.json')
 
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
@@ -604,6 +635,7 @@ if __name__ == '__main__':
     # (1) simple average
     dataset = []
 
+    '''
     dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
@@ -611,7 +643,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/EW_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/EW_adp_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/EW_adp_MSFE.csv', encoding='utf-8-sig')'''
 
 
     '''# (2) smart consensus
@@ -642,22 +674,23 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/IMSE_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMSE_adp_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/IMSE_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (4) Bias-Adjusted Mean (BAM)
-    #min_count = 3
-    #dataset = []
-    #multi_arg = list(product(UniqueSymbol, [min_count]))
+    # (4) Bias-Adjusted Mean (BAM)
+    min_count = 3
+    dataset = []
+    multi_arg = list(product(UniqueSymbol, [min_count]))
 
-    #dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
+    dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
 
-    #dataset_pd = pd.concat(dataset)
-    #dataset_pd['MAFE'] = dataset_pd.Error.abs()
-    #MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
-    #print(MSFE_result)
-    #dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
-    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd = pd.concat(dataset)
+    dataset_pd['MAFE'] = dataset_pd.Error.abs()
+    MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
+    print(MSFE_result)
+    dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
+    '''
 
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
@@ -672,10 +705,10 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/BAM_adj_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (6) Iterated Mean Combination (IMC)
+    # (6) Iterated Mean Combination (IMC)
     min_count = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -687,9 +720,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/IMC_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMC_adp_MSFE.csv', encoding='utf-8-sig')'''
-
-    pd.DataFrame.from_dict(cache_ltable).to_csv('./result/cache_ltable.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/IMC_adp_MSFE.csv', encoding='utf-8-sig')
 
 # equation should be y = AVG( x * q(t) ) + b
 # where q(t) = k / ( 1 + exp(-(t - t0)) )
