@@ -5,11 +5,10 @@ from itertools import product
 import numpy as np
 from numpy import nan
 import pandas as pd
-from scipy.optimize import curve_fit, minimize
+from scipy.optimize import curve_fit
+from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
-from multiprocessing import Pool, Array
-from functools import lru_cache
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -430,12 +429,14 @@ def BAM_adj_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 2))]
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 1))
+                            ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                            ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
@@ -450,14 +451,16 @@ def BAM_adj_adp(x):
 
         # list to append previous year's error rate by analyst
         lenYear = len(tempdata.Year.unique())
-        if lenYear >= min_count:
+        if lenYear >= 1: #min_count:
             # Linear Regression between E_ROE and A_ROE
-            randarr = np.random.randint(low=-20, high=20, size=len(tempdata)) / 10000
             try:
-                slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'] + randarr, 1)
+                #slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'], 1)
+                lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
+                slope = lr_result.coef_[0]
+                intercept = 0
             except:
                 slope = 1
-                intercept = 1
+                intercept = 0
         elif lenYear == 0:
             slope = 1
             intercept = 0
@@ -509,12 +512,14 @@ def IMC_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 2))]
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                            ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                            ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
@@ -536,9 +541,8 @@ def IMC_adp(x):
             for S in df.SecAnl.unique():
                 temp = tempdata[tempdata.SecAnl == S]
                 if len(temp) >= min_count and len(temp.Year.unique())>1:
-                    randarr = np.random.randint(low=-20, high=20, size=len(temp)) / 10000
                     try:
-                        slope, intercept = np.polyfit(temp['E_ROE'], temp['A_ROE'] + randarr, 1)
+                        slope, intercept = np.polyfit(temp['E_ROE'], temp['A_ROE'], 1)
                     except:
                         slope = 1
                         intercept = 0
@@ -561,9 +565,8 @@ def IMC_adp(x):
         lenYear = len(tempdata.Year.unique())
         if lenYear >= min_count:
             # Linear Regression between E_ROE and A_ROE
-            randarr = np.random.randint(low=-20, high=20, size=len(tempdata)) / 10000
             try:
-                slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'] + randarr, 1)
+                slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'], 1)
             except:
                 slope = 1
                 intercept = 0
@@ -692,23 +695,24 @@ if __name__ == '__main__':
     MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
     '''
 
-
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
 
+    for arg in tqdm(multi_arg[1000:]):
+        dataset.append(BAM_adj_adp(arg))
     dataset = process_map(BAM_adj_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/BAM_adj_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/BAM_adj_adp_{min_count}c.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/BAM_adj_adp_MSFE_{min_count}c.csv', encoding='utf-8-sig')
 
 
-    # (6) Iterated Mean Combination (IMC)
+    '''# (6) Iterated Mean Combination (IMC)
     min_count = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -719,8 +723,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/IMC_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMC_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/IMC_adp_{min_count}c.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/IMC_adp_MSFE_{min_count}c.csv', encoding='utf-8-sig')'''
 
 # equation should be y = AVG( x * q(t) ) + b
 # where q(t) = k / ( 1 + exp(-(t - t0)) )

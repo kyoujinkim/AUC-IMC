@@ -237,13 +237,13 @@ def BAM_adj(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 3))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
@@ -292,13 +292,13 @@ def IMC(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                             #& (train.Year >= str(int(df.Year.iloc[0]) - 3))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
@@ -444,7 +444,7 @@ if __name__ == '__main__':
     #MSFE_result.to_csv('./result/BAM_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (5) Bias-Adjusted Mean Adjusted (BAM_adj)
+    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 3
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -456,7 +456,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/BAM_adj.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adj_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/BAM_adj_MSFE.csv', encoding='utf-8-sig')
 
 
     # (6) Iterated Mean Combination (IMC)
