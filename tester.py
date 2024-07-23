@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
+from sklearn.linear_model import LinearRegression
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -218,7 +219,7 @@ def BAM(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}#, , 'Coeff': [coeffset]*len(data)}
     )
 
     return fulldata
@@ -237,13 +238,13 @@ def BAM_adj(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
@@ -251,11 +252,13 @@ def BAM_adj(x):
         lenYear = len(tempdata.Year.unique())
         if lenYear >= min_count:
             # Linear Regression between E_ROE and A_ROE
-            randarr = np.random.randint(low=-20, high=20, size=len(tempdata)) / 10000
-            slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'] + randarr, 1)
-        elif lenYear == 0:
-            slope = 1
-            intercept = 0
+            try:
+                lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
+                slope = lr_result.coef_[0]
+                intercept = lr_result.intercept_
+            except:
+                slope = 1
+                intercept = 0
         else:
             slope = 1
             intercept = 0
@@ -270,7 +273,7 @@ def BAM_adj(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'QCoeff': coeffset.Slope}
     )
 
     return fulldata
@@ -292,17 +295,17 @@ def IMC(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
-        if len(tempdata) > min_count:
+        if len(tempdata) > 0:
             tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
             tempdata['SecAnl'] = tempdata['Security'] + tempdata['CoreAnalyst']
 
@@ -310,15 +313,17 @@ def IMC(x):
             tempset = []
             for S in df.SecAnl.unique():
                 temp = tempdata[tempdata.SecAnl == S]
-                if len(temp) >= min_count and len(temp.Year.unique())>1:
-                    randarr = np.random.randint(low=-20, high=20, size=len(temp)) / 10000
-                    slope, intercept = np.polyfit(temp['E_ROE'], temp['A_ROE'] + randarr, 1)
-                elif len(temp) == 0:
-                    slope = 1
-                    intercept = 0
+                if len(temp) >= 10 and len(temp.Year.unique()) >= min_count:
+                    try:
+                        lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),tempdata['A_ROE'])
+                        slope = lr_result.coef_[0]
+                        intercept = lr_result.intercept_
+                    except:
+                        slope = 1
+                        intercept = 0
                 else:
                     slope = 1
-                    intercept = (temp.A_ROE - temp.E_ROE).mean()
+                    intercept = 0
                 tempset.append([S, Q, slope, intercept])
 
             # get S by S data
@@ -332,11 +337,13 @@ def IMC(x):
         lenYear = len(tempdata.Year.unique())
         if lenYear >= min_count:
             # Linear Regression between E_ROE and A_ROE
-            randarr = np.random.randint(low=-20, high=20, size=len(tempdata)) / 10000
-            slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'] + randarr, 1)
-        elif lenYear == 0:
-            slope = 1
-            intercept = 0
+            try:
+                lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
+                slope = lr_result.coef_[0]
+                intercept = lr_result.intercept_
+            except:
+                slope = 1
+                intercept = 0
         else:
             slope = 1
             intercept = 0
@@ -355,14 +362,13 @@ def IMC(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'QCoeff': Qcoeffset.Slope}
     )
 
     return fulldata
 
 
 train = pd.read_csv('./data/total.csv', encoding='utf-8-sig')
-train = train.dropna()
 train.BPS = train.BPS.astype(float)
 #droprow if BPS is less than 0
 train = train[train.BPS > 0]
@@ -385,8 +391,8 @@ train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
-    # (1) simple average
-    '''dataset = []
+    '''# (1) simple average
+    dataset = []
 
     dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
 
@@ -395,10 +401,10 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/EW.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/EW_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/EW_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (2) smart consensus
+    # (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
@@ -411,10 +417,10 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/PBest.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/PBest_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/PBest_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (3) Inverse MSE (IMSE)
+    # (3) Inverse MSE (IMSE)
     min_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -426,8 +432,8 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/IMSE.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMSE_MSFE.csv', encoding='utf-8-sig')
-'''
+    MSFE_result.to_csv('./result/IMSE_MSFE.csv', encoding='utf-8-sig')'''
+
 
     # (4) Bias-Adjusted Mean (BAM)
     #min_count = 3
@@ -445,7 +451,7 @@ if __name__ == '__main__':
 
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
-    min_count = 3
+    min_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
 
@@ -455,12 +461,12 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/BAM_adj.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adj_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv('./result/BAM_adj_5c_10y.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/BAM_adj_MSFE_5c_10y.csv', encoding='utf-8-sig')
 
 
     # (6) Iterated Mean Combination (IMC)
-    min_count = 3
+    min_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
 
@@ -470,8 +476,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd. Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/IMC.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMC_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv('./result/IMC_5c_10y.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/IMC_MSFE_5c_10y.csv', encoding='utf-8-sig')
 
     #draw 3d surface plot with dataset_pd
     '''byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()

@@ -92,11 +92,11 @@ def term_spread_adj(sector, year):
     sector = sector
     # if sector is na
     if pd.isna(sector):
-        prev_data_bf = train[(train.Year <= str(currYear - 2))]  # & (train.Year >= str(currYear - 6))]
-        prev_data_af = train[(train.Year <= str(currYear - 1))]  # & (train.Year >= str(currYear - 5))]
+        prev_data_bf = train[(train.Year <= str(currYear - 2))  & (train.Year >= str(currYear - 11))]
+        prev_data_af = train[(train.Year <= str(currYear - 1))  & (train.Year >= str(currYear - 10))]
     else:
-        prev_data_bf = train[(train.Sector == sector) & (train.Year <= str(currYear - 2))]# & (train.Year >= str(currYear - 6))]
-        prev_data_af = train[(train.Sector == sector) & (train.Year <= str(currYear - 1))]# & (train.Year >= str(currYear - 5))]
+        prev_data_bf = train[(train.Sector == sector) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
+        prev_data_af = train[(train.Sector == sector) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
 
     num_of_obs = 5
 
@@ -354,12 +354,12 @@ def BAM_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
@@ -429,41 +429,37 @@ def BAM_adj_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]-1))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
-            if popt_af[0] == 0:
+            if pd.isna(popt_af[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
             tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
         else:
-            if popt_bf[0] == 0:
+            if pd.isna(popt_bf[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
             tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
         lenYear = len(tempdata.Year.unique())
-        if lenYear >= 1: #min_count:
+        if lenYear >= min_count:
             # Linear Regression between E_ROE and A_ROE
             try:
-                #slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'], 1)
                 lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
                 slope = lr_result.coef_[0]
-                intercept = 0
+                intercept = lr_result.intercept_
             except:
                 slope = 1
                 intercept = 0
-        elif lenYear == 0:
-            slope = 1
-            intercept = 0
         else:
             slope = 1
             intercept = 0
@@ -478,7 +474,7 @@ def BAM_adj_adp(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': coeffset.Slope}
     )
 
     return fulldata
@@ -512,27 +508,27 @@ def IMC_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 2))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             #& (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]-1))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
 
         if Q < 4:
-            if popt_af[0] == 0:
+            if pd.isna(popt_af[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
             tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
         else:
-            if popt_bf[0] == 0:
+            if pd.isna(popt_bf[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
             tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
-        if len(tempdata) > min_count:
+        if len(tempdata) > 0:
             tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
             tempdata['SecAnl'] = tempdata['Security'] + tempdata['CoreAnalyst']
 
@@ -540,18 +536,17 @@ def IMC_adp(x):
             tempset = []
             for S in df.SecAnl.unique():
                 temp = tempdata[tempdata.SecAnl == S]
-                if len(temp) >= min_count and len(temp.Year.unique())>1:
+                if len(temp) >= 10 and len(temp.Year.unique()) >= min_count:
                     try:
-                        slope, intercept = np.polyfit(temp['E_ROE'], temp['A_ROE'], 1)
+                        lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),tempdata['A_ROE'])
+                        slope = lr_result.coef_[0]
+                        intercept = lr_result.intercept_
                     except:
                         slope = 1
                         intercept = 0
-                elif len(temp) == 0:
-                    slope = 1
-                    intercept = 0
                 else:
                     slope = 1
-                    intercept = (temp.A_ROE - temp.E_ROE).mean()
+                    intercept = 0
                 tempset.append([S, Q, slope, intercept])
 
             # get S by S data
@@ -566,7 +561,9 @@ def IMC_adp(x):
         if lenYear >= min_count:
             # Linear Regression between E_ROE and A_ROE
             try:
-                slope, intercept = np.polyfit(tempdata['E_ROE'], tempdata['A_ROE'], 1)
+                lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
+                slope = lr_result.coef_[0]
+                intercept = lr_result.intercept_
             except:
                 slope = 1
                 intercept = 0
@@ -591,7 +588,7 @@ def IMC_adp(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': Qcoeffset.Slope}
     )
 
     return fulldata
@@ -620,8 +617,8 @@ train['CutDate'] = train.Year + '-03-31'
 
 cache_ltable = dict()
 # we have no choice but have to update cache_lookup table explicitly
-if os.path.exists('./result/cache_ltable.json'):
-    with open('./result/cache_ltable.json') as f:
+if os.path.exists('./result/cache_ltable_10y.json'):
+    with open('./result/cache_ltable_10y.json') as f:
         cache_ltable = json.load(f)
     cache_ltable = {eval(k): v for k, v in cache_ltable.items()}
 
@@ -630,23 +627,23 @@ else:
     for table in tqdm(listoftable):
         term_spread_adj(*table)
 
-    pd.DataFrame(cache_ltable).to_json('./result/cache_ltable.json')
+    pd.DataFrame(cache_ltable).to_json('./result/cache_ltable_10y.json')
 
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
     # (1) simple average
-    dataset = []
+    '''dataset = []
 
-    '''
+    
     dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/EW_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/EW_adp_MSFE.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv('./result/EW_adp_10y_all.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv('./result/EW_adp_MSFE_10y_all.csv', encoding='utf-8-sig')'''
 
 
     '''# (2) smart consensus
@@ -681,41 +678,41 @@ if __name__ == '__main__':
 
 
     # (4) Bias-Adjusted Mean (BAM)
-    min_count = 3
-    dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    #min_count = 3
+    #dataset = []
+    #multi_arg = list(product(UniqueSymbol, [min_count]))
 
-    dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
+    #dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
 
-    dataset_pd = pd.concat(dataset)
-    dataset_pd['MAFE'] = dataset_pd.Error.abs()
-    MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
-    print(MSFE_result)
-    dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
-    '''
+    #dataset_pd = pd.concat(dataset)
+    #dataset_pd['MAFE'] = dataset_pd.Error.abs()
+    #MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
+    #print(MSFE_result)
+    #dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
+    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')'''
+
+    min_count = 5
+    year_range = 10
 
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
-    min_count = 3
+    #min_count = 2
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
 
-    for arg in tqdm(multi_arg[1000:]):
-        dataset.append(BAM_adj_adp(arg))
     dataset = process_map(BAM_adj_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/BAM_adj_adp_{min_count}c.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/BAM_adj_adp_MSFE_{min_count}c.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/BAM_adj_adp_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/BAM_adj_adp_MSFE_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
 
 
-    '''# (6) Iterated Mean Combination (IMC)
-    min_count = 3
+    # (6) Iterated Mean Combination (IMC)
+    #min_count = 2
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
 
     dataset = process_map(IMC_adp, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -723,9 +720,5 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/IMC_adp_{min_count}c.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/IMC_adp_MSFE_{min_count}c.csv', encoding='utf-8-sig')'''
-
-# equation should be y = AVG( x * q(t) ) + b
-# where q(t) = k / ( 1 + exp(-(t - t0)) )
-#train['q'] = (1 / (1 + np.exp(-train.DBtw)) - 0.5) * 2 # set range as 0 to 1
+    dataset_pd.to_csv(f'./result/IMC_adp_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/IMC_adp_MSFE_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
