@@ -43,10 +43,11 @@ def EW(x):
     symbol = x
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
+    EW = df.groupby('QBtw')['E_ROE'].mean()
+    data = EW - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Est': EW.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
     )
 
     return fulldata
@@ -391,7 +392,7 @@ train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
-    '''# (1) simple average
+    # (1) simple average
     dataset = []
 
     dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
@@ -432,7 +433,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv('./result/IMSE.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMSE_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv('./result/IMSE_MSFE.csv', encoding='utf-8-sig')
 
 
     # (4) Bias-Adjusted Mean (BAM)

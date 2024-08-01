@@ -474,7 +474,7 @@ def BAM_adj_adp(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': coeffset.Slope}
+        {'QBtw': data.index, 'Est': estBAM.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': coeffset.Slope}
     )
 
     return fulldata
@@ -588,7 +588,7 @@ def IMC_adp(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': Qcoeffset.Slope}
+        {'QBtw': data.index, 'Est': estIMC.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': Qcoeffset.Slope}
     )
 
     return fulldata
