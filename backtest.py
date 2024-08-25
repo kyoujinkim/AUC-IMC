@@ -136,14 +136,14 @@ def calc_shock(model):
 
     LS_rtn.to_csv(f'./result/return_analysis/LS_rtn{model_name}.csv', encoding='utf-8-sig')
 
-model_list = glob('./result/IMC_adp_10y_5c_10y.csv')
+model_list = glob('result/IMC_adp_10y_5c_10y.csv')
 model_list = [model for model in model_list if '_MSFE' not in model and 'EW.csv' not in model]
 
 # weekly price data of stocks
-price = pd.read_excel('./data/price_qw.xlsx', sheet_name='price', header=7, index_col=0, parse_dates=True).iloc[6:].astype(float)
+price = pd.read_excel('./data/korea/price_qw.xlsx', sheet_name='price', header=7, index_col=0, parse_dates=True).iloc[6:].astype(float)
 price.index = pd.to_datetime(price.index)
 
-kprice = pd.read_excel('./data/price_qw.xlsx', sheet_name='kprice', header=7, index_col=0, parse_dates=True).iloc[6:].astype(float)
+kprice = pd.read_excel('./data/korea/price_qw.xlsx', sheet_name='kprice', header=7, index_col=0, parse_dates=True).iloc[6:].astype(float)
 kprice = kprice.dropna(how='all',axis=1)
 kprice.index = pd.to_datetime(kprice.index)
 
@@ -154,7 +154,7 @@ rtn_abs = rtn - krtn.values
 rtn_abs = rtn_abs.where(rtn.notnull(), np.nan)
 
 # total data
-total_data = pd.read_csv('./data/total.csv')
+total_data = pd.read_csv('data/korea/total.csv')
 total_data['EPS_former'] = total_data['A_EPS_1(지배)'] / total_data['BPS'].values
 total_data['Year'] = total_data.FY.str.extract(r'(\d{4})')
 total_data['EDate'] = pd.to_datetime((total_data.Year.astype(int) + 1).astype(str) + '-03-31')
@@ -165,7 +165,7 @@ total_data['QBtw'] = (total_data['totalDiff'] / 3).astype(int)
 total_data = total_data.drop_duplicates(subset=['Code', 'QBtw', 'FY'])
 total_data = total_data.set_index(['Code', 'QBtw', 'FY'])
 
-EW = pd.read_csv('./result/EW.csv', index_col=0).set_index(['Code','QBtw', 'FY'])
+EW = pd.read_csv('result/EW.csv', index_col=0).set_index(['Code', 'QBtw', 'FY'])
 
 if __name__ == '__main__':
     # multiprocessing

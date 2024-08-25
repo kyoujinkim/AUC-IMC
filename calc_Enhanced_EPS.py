@@ -23,12 +23,16 @@ class Enhanced_EPS(object):
         self.min_count = 5
         self.year_range = 10
 
+    #set base data for calculation
+    def set_data(self, train):
+        self.train = train
+
     def calc_ucurve(self, prdYear, train):
         listoftable = list(product(train.Sector.unique(), prdYear))
         for table in tqdm(listoftable):
             self.ucurve[table] = term_spread_adj(*table, train=train)
 
-        pd.DataFrame(self.ucurve).to_json('./result/ucurve.json')
+        pd.DataFrame(self.ucurve).to_json('result/ucurve.json')
 
     def calc_IMC(self, UniqueSymbol):
 
@@ -278,7 +282,7 @@ def EW_adp(x):
     return data
 
 
-train = build_data('./data/consenlist*.csv', './data/QGDP.xlsx', 10)
+train = build_data('data/korea/consenlist*.csv', './data/korea/QGDP.xlsx', 10)
 train.BPS = train.BPS.astype(float)
 #droprow if BPS is less than 0
 train = train[train.BPS > 0]
@@ -298,14 +302,18 @@ train['QBtw'] = (train['totalDiff'] / 3).astype(int)
 
 train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
 train['CutDate'] = train.Year + '-03-31'
+prddate = '2024-08-19' # '2024-07-18' '2024-08-19'
+train = train[train.Date <= prddate]
 
 if __name__ == '__main__':
-    prdYears = [2023, 2024, 2025]
+    prdYears = [2024, 2025]
+
     model = Enhanced_EPS()
     model.calc_ucurve(prdYears, train)
+
     for prdyear in prdYears:
-        UniqueSymbol = train[(train.Year==str(prdyear))].UniqueSymbol.unique()
+        UniqueSymbol = train[train.Year==str(prdyear)].UniqueSymbol.unique()
         result = model.calc_IMC(UniqueSymbol)
-        result.to_csv(f'./result/IMC_adp{prdyear}.csv', encoding='utf-8-sig')
+        result.to_csv(f'./result/IMC_adp{prdyear}_{prddate}.csv', encoding='utf-8-sig')
         result = model.calc_adpEW(UniqueSymbol)
-        result.to_csv(f'./result/EW_adp{prdyear}.csv', encoding='utf-8-sig')
+        result.to_csv(f'./result/EW_adp{prdyear}_{prddate}.csv', encoding='utf-8-sig')

@@ -85,6 +85,15 @@ def memoize(func):
     return wrapper
 
 
+def filter_outlier(df, codecol, errorcol):
+    df_grouped = df.groupby(codecol)[errorcol].mean()
+    meanval = df_grouped.mean()
+    stdval = df_grouped.std()
+    df_list = df_grouped[(df_grouped < meanval + 1.5 * stdval) & (df_grouped > meanval - 1.5 * stdval)].index
+
+    return df[df[codecol].isin(df_list)]
+
+
 @memoize
 def term_spread_adj(sector, year):
 
@@ -105,6 +114,7 @@ def term_spread_adj(sector, year):
         popt_bf = np.array([np.nan] * num_of_obs)
     else:
         try:
+            prev_data_bf = filter_outlier(prev_data_bf, 'Code', 'Error')
             popt_bf, pcov_bf = curve_fit(
                 term_spread
                 , prev_data_bf
@@ -123,10 +133,11 @@ def term_spread_adj(sector, year):
         popt_af = np.array([np.nan] * num_of_obs)
     else:
         try:
+            prev_data_af = filter_outlier(prev_data_af, 'Code', 'Error')
             popt_af, pcov_af = curve_fit(
                 term_spread
-                , xdata=prev_data_bf
-                , ydata=prev_data_bf.Error
+                , xdata=prev_data_af
+                , ydata=prev_data_af.Error
                 , method='trf'
                 , p0=[0, 0.01, 0.01, 0.01, 1]#b0, c, b1, b2, lam
                 , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf),(1, np.inf, np.inf, np.inf, np.inf))
@@ -161,7 +172,7 @@ def EW_adp(x):
     data_std = df.groupby('QBtw')['E_ROE'].std()
 
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
     )
 
     return fulldata
@@ -238,7 +249,7 @@ def PBest_adp(x):
     data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
     )
 
     return fulldata
@@ -323,7 +334,7 @@ def IMSE_adp(x):
             - df.groupby('QBtw')['A_ROE'].mean())
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
     )
 
     return fulldata
@@ -398,7 +409,7 @@ def BAM_adp(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
     )
 
     return fulldata
@@ -474,7 +485,7 @@ def BAM_adj_adp(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Est': estBAM.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': coeffset.Slope}
+        {'QBtw': data.index, 'Est': estBAM.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': coeffset.Slope}
     )
 
     return fulldata
@@ -588,19 +599,20 @@ def IMC_adp(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Est': estIMC.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': Qcoeffset.Slope}
+        {'QBtw': data.index, 'Est': estIMC.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': Qcoeffset.Slope}
     )
 
     return fulldata
 
 
-train = pd.read_csv('./data/total.csv', encoding='utf-8-sig')
+country = 'us'
+train = pd.read_csv(f'data/{country}/total.csv', encoding='utf-8-sig')
 train.BPS = train.BPS.astype(float)
 #droprow if BPS is less than 0
 train = train[train.BPS > 0]
 train['UniqueSymbol'] = train['Code'] + train['FY']
-train['E_ROE'] = train['E_EPS(지배)'] / train.BPS
-train['A_ROE'] = train['A_EPS(지배)'] / train.BPS
+train['E_ROE'] = train['E_EPS'] / train.BPS
+train['A_ROE'] = train['A_EPS'] / train.BPS
 train['Error'] = train['E_ROE'] - train['A_ROE']
 
 # since information about earnings change as time, seperate date window as 90 days
@@ -617,8 +629,8 @@ train['CutDate'] = train.Year + '-03-31'
 
 cache_ltable = dict()
 # we have no choice but have to update cache_lookup table explicitly
-if os.path.exists('./result/cache_ltable_10y.json'):
-    with open('./result/cache_ltable_10y.json') as f:
+if os.path.exists(f'result/{country}/cache_ltable.json'):
+    with open(f'result/{country}/cache_ltable.json') as f:
         cache_ltable = json.load(f)
     cache_ltable = {eval(k): v for k, v in cache_ltable.items()}
 
@@ -627,13 +639,13 @@ else:
     for table in tqdm(listoftable):
         term_spread_adj(*table)
 
-    pd.DataFrame(cache_ltable).to_json('./result/cache_ltable_10y.json')
+    pd.DataFrame(cache_ltable).to_json(f'result/{country}/cache_ltable.json')
 
 if __name__ == '__main__':
     UniqueSymbol = train.UniqueSymbol.unique()
 
     # (1) simple average
-    '''dataset = []
+    dataset = []
 
     
     dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
@@ -642,11 +654,11 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/EW_adp_10y_all.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/EW_adp_MSFE_10y_all.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv(f'./result/{country}/EW_adp.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/EW_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (2) smart consensus
+    # (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
@@ -658,8 +670,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/PBest_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/PBest_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/PBest_adp.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/PBest_adp_MSFE.csv', encoding='utf-8-sig')
 
 
     # (3) Inverse MSE (IMSE)
@@ -673,8 +685,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/IMSE_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMSE_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/IMSE_adp.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMSE_adp_MSFE.csv', encoding='utf-8-sig')
 
 
     # (4) Bias-Adjusted Mean (BAM)
@@ -689,7 +701,7 @@ if __name__ == '__main__':
     #MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     #print(MSFE_result)
     #dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
-    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')'''
+    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
 
     min_count = 5
     year_range = 10
@@ -705,11 +717,11 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/BAM_adj_adp_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/BAM_adj_adp_MSFE_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/BAM_adj_adp.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    # (6) Iterated Mean Combination (IMC)
+    '''# (6) Iterated Mean Combination (IMC)
     #min_count = 2
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
@@ -722,3 +734,4 @@ if __name__ == '__main__':
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/IMC_adp_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
     MSFE_result.to_csv(f'./result/IMC_adp_MSFE_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
+    '''

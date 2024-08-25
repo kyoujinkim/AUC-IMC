@@ -11,6 +11,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 #disable warnings
 import warnings
+from src.funs import build_data
 warnings.filterwarnings('ignore')
 
 
@@ -47,7 +48,7 @@ def EW(x):
     data = EW - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Est': EW.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Est': EW.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -104,7 +105,7 @@ def PBest(x):
     data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -169,7 +170,7 @@ def IMSE(x):
             - df.groupby('QBtw')['A_ROE'].mean())
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -220,7 +221,7 @@ def BAM(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}#, , 'Coeff': [coeffset]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}#, , 'Coeff': [coeffset]*len(data)}
     )
 
     return fulldata
@@ -274,7 +275,7 @@ def BAM_adj(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'QCoeff': coeffset.Slope}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'QCoeff': coeffset.Slope}
     )
 
     return fulldata
@@ -363,19 +364,20 @@ def IMC(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data), 'QCoeff': Qcoeffset.Slope}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'QCoeff': Qcoeffset.Slope}
     )
 
     return fulldata
 
-
-train = pd.read_csv('./data/total.csv', encoding='utf-8-sig')
+country = 'us'
+#train = pd.read_csv('data/korea/total.csv', encoding='utf-8-sig')
+train = pd.read_csv(f'data/{country}/total.csv', encoding='utf-8-sig')
 train.BPS = train.BPS.astype(float)
 #droprow if BPS is less than 0
 train = train[train.BPS > 0]
 train['UniqueSymbol'] = train['Code'] + train['FY']
-train['E_ROE'] = train['E_EPS(지배)'] / train.BPS
-train['A_ROE'] = train['A_EPS(지배)'] / train.BPS
+train['E_ROE'] = train['E_EPS'] / train.BPS
+train['A_ROE'] = train['A_EPS'] / train.BPS
 train['Error'] = train['E_ROE'] - train['A_ROE']
 
 # since information about earnings change as time, seperate date window as 90 days
@@ -401,8 +403,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/EW.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/EW_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/EW.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/EW_MSFE.csv', encoding='utf-8-sig')
 
 
     # (2) smart consensus
@@ -417,8 +419,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/PBest.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/PBest_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/PBest.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/PBest_MSFE.csv', encoding='utf-8-sig')
 
 
     # (3) Inverse MSE (IMSE)
@@ -432,8 +434,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/IMSE.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMSE_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/IMSE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMSE_MSFE.csv', encoding='utf-8-sig')
 
 
     # (4) Bias-Adjusted Mean (BAM)
@@ -462,8 +464,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/BAM_adj_5c_10y.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/BAM_adj_MSFE_5c_10y.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/BAM_adj.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/BAM_adj_MSFE.csv', encoding='utf-8-sig')
 
 
     # (6) Iterated Mean Combination (IMC)
@@ -480,8 +482,8 @@ if __name__ == '__main__':
     dataset_pd.to_csv('./result/IMC_5c_10y.csv', encoding='utf-8-sig')
     MSFE_result.to_csv('./result/IMC_MSFE_5c_10y.csv', encoding='utf-8-sig')
 
-    #draw 3d surface plot with dataset_pd
-    '''byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()
+    '''#draw 3d surface plot with dataset_pd
+    byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()
     byFY_r = byFY.reset_index()
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')

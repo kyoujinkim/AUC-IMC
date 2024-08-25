@@ -135,7 +135,9 @@ def EW(x, train):
 
     return fulldata
 
-def build_data(path:str='./data/consenlist*.csv', gdppath:str='./data/QGDP.xlsx', ts_length:int=10):
+def build_data(path:str='./data/consenlist*.csv', gdppath:str='./data/QGDP.xlsx', ts_length:int=10, country:str='kr'):
+    if country not in ['kr', 'us']:
+        raise ValueError('country should be either kr or us')
 
     consenlist = glob(path)
     for idx, file in enumerate(consenlist):
@@ -144,7 +146,24 @@ def build_data(path:str='./data/consenlist*.csv', gdppath:str='./data/QGDP.xlsx'
         else:
             df = pd.concat([df, pd.read_csv(file)], ignore_index=True, axis=0)
 
-    df = df.dropna(subset=['BPS', 'E_EPS(지배)'])
+    if country == 'us':
+        df = df.rename(columns={'Instrument': 'Code'
+            , 'Analyst Name': 'Analyst'
+            , 'Broker Name': 'Security'
+            , 'Period Year': 'Year'
+            , 'Earnings Per Share - Broker Estimate': 'E_EPS'
+            , 'EPS': 'A_EPS'
+            , 'GICS': 'Sector'})
+        df = df.dropna(subset='Year')
+        df.Year = df.Year.astype(int).astype(str)
+        df['FY'] = df.Year + 'AS'
+        df['Security'] = df.Security.replace(r'\([^)]*\)','', regex=True)
+        df['FilingDeadline'] = (df.Year.astype(int) - 1).astype(str) + '-04-15'
+        df['A_EPS_1'] = df.apply(lambda x: x.EPS_1Y if x.Date > x.FilingDeadline else x.EPS_2Y, axis=1)
+
+    df = df.dropna(subset=['BPS', 'E_EPS'])
+    df = df.drop_duplicates()
+    df.Date = pd.to_datetime(df.Date).dt.strftime('%Y-%m-%d')
     date_max = df.Date.max()
 
     gdp = pd.read_excel(gdppath, sheet_name='Sheet1', header=13, index_col=0, parse_dates=True).dropna(how='all', axis=0).dropna(axis=1)
@@ -159,7 +178,9 @@ def build_data(path:str='./data/consenlist*.csv', gdppath:str='./data/QGDP.xlsx'
     df = df[df.Date > df.CutDate]
     df['Gdp'] = df.Date.map(gdp_roll.iloc[:,0])
 
-    df = df[df.Year >= str(int(df.Year.max()) - (ts_length+5))] # add some margin on length of years
+    if ts_length == -1:
+        pass
+    else:
+        df = df[df.Year >= str(int(df.Year.max()) - (ts_length+5))] # add some margin on length of years
 
     return df
-
