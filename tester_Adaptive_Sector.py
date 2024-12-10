@@ -2,6 +2,7 @@ import json
 import os
 from itertools import product
 
+from src.funs import build_data, filter_guided_stock
 import numpy as np
 from numpy import nan
 import pandas as pd
@@ -29,6 +30,7 @@ warnings.filterwarnings('ignore')
 def term_spread(x, b0, c, b1, b2, lam):
     theta = x.DBtw / 365 / lam
     return b0 + c*x.Gdp/100 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
+    #return b0 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
 
 
 def avg_by_unique_sec(df, column='E_ROE', weight_column=None, method='simple'):
@@ -89,12 +91,11 @@ def filter_outlier(df, codecol, errorcol):
     df_grouped = df.groupby(codecol)[errorcol].mean()
     meanval = df_grouped.mean()
     stdval = df_grouped.std()
-    df_list = df_grouped[(df_grouped < meanval + 1.5 * stdval) & (df_grouped > meanval - 1.5 * stdval)].index
+    df_list = df_grouped[(df_grouped < meanval + 2 * stdval) & (df_grouped > meanval - 2 * stdval)].index
 
     return df[df[codecol].isin(df_list)]
 
-
-@memoize
+#@memoize
 def term_spread_adj(sector, year):
 
     currYear = int(year)
@@ -104,8 +105,8 @@ def term_spread_adj(sector, year):
         prev_data_bf = train[(train.Year <= str(currYear - 2))  & (train.Year >= str(currYear - 11))]
         prev_data_af = train[(train.Year <= str(currYear - 1))  & (train.Year >= str(currYear - 10))]
     else:
-        prev_data_bf = train[(train.Sector == sector) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
-        prev_data_af = train[(train.Sector == sector) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
+        prev_data_bf = train[(train.SectorClass == sector) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
+        prev_data_af = train[(train.SectorClass == sector) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
 
     num_of_obs = 5
 
@@ -155,7 +156,7 @@ def EW_adp(x):
     symbol = x
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-    sector = df.Sector.iloc[-1]
+    sector = df.SectorClass.iloc[-1]
     popt = term_spread_adj(sector, year)
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
@@ -172,7 +173,7 @@ def EW_adp(x):
     data_std = df.groupby('QBtw')['E_ROE'].std()
 
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -185,7 +186,7 @@ def PBest_adp(x):
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-    sector = df.Sector.iloc[-1]
+    sector = df.SectorClass.iloc[-1]
     popt = term_spread_adj(sector, year)
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
@@ -214,11 +215,11 @@ def PBest_adp(x):
         if Q < 4:
             if popt_af[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
         else:
             if popt_bf[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -249,7 +250,7 @@ def PBest_adp(x):
     data = df.groupby('QBtw')['E_ROE'].mean() - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -261,7 +262,7 @@ def IMSE_adp(x):
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-    sector = df.Sector.iloc[-1]
+    sector = df.SectorClass.iloc[-1]
     popt = term_spread_adj(sector, year)
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
@@ -290,11 +291,11 @@ def IMSE_adp(x):
         if Q < 4:
             if popt_af[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
         else:
             if popt_bf[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -329,12 +330,17 @@ def IMSE_adp(x):
         df.PrevError += 0.01
 
     df['I_PrevError'] = df['PrevError'].pow(-1)
+    # limit upper and lower bound of I_PrevError as +- 2 stdev
+    df_mean = df['I_PrevError'].mean()
+    df_std = df['I_PrevError'].std()
+    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 2 * df_std, upper=df_mean + 2 * df_std)
     df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
-    data = ((df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum())
-            - df.groupby('QBtw')['A_ROE'].mean())
+    estIMSE = df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum()
+
+    data = estIMSE - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Est': estIMSE.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -347,7 +353,7 @@ def BAM_adp(x):
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-    sector = df.Sector.iloc[-1]
+    sector = df.SectorClass.iloc[-1]
     popt = term_spread_adj(sector, year)
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
@@ -376,11 +382,11 @@ def BAM_adp(x):
         if Q < 4:
             if popt_af[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
         else:
             if popt_bf[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -409,7 +415,7 @@ def BAM_adp(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data)}
+        {'QBtw': data.index, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -422,7 +428,7 @@ def BAM_adj_adp(x):
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-    sector = df.Sector.iloc[-1]
+    sector = df.SectorClass.iloc[-1]
     popt = term_spread_adj(sector, year)
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
@@ -453,11 +459,11 @@ def BAM_adj_adp(x):
         if Q < 4:
             if pd.isna(popt_af[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
         else:
             if pd.isna(popt_bf[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -485,7 +491,7 @@ def BAM_adj_adp(x):
     data = estBAM - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Est': estBAM.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': coeffset.Slope}
+        {'QBtw': data.index, 'Est': estBAM.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
@@ -498,7 +504,8 @@ def IMC_adp(x):
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-    sector = df.Sector.iloc[-1]
+
+    sector = df.SectorClass.iloc[-1]
     popt = term_spread_adj(sector, year)
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
@@ -532,11 +539,11 @@ def IMC_adp(x):
         if Q < 4:
             if pd.isna(popt_af[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
         else:
             if pd.isna(popt_bf[0]):
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1))
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         if len(tempdata) > 0:
@@ -599,33 +606,54 @@ def IMC_adp(x):
     data = estIMC - df.groupby('QBtw')['A_ROE'].mean()
     data_std = df.groupby('QBtw')['E_ROE'].std()
     fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Est': estIMC.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data), 'Popt': [[popt_bf, popt_af]]*len(data), 'QCoeff': Qcoeffset.Slope}
+        {'QBtw': data.index, 'Est': estIMC.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:-6]] * len(data), 'FY': [symbol[-6:]] * len(data)}
     )
 
     return fulldata
 
 
 country = 'us'
-train = pd.read_csv(f'data/{country}/total.csv', encoding='utf-8-sig')
-train.BPS = train.BPS.astype(float)
-#droprow if BPS is less than 0
-train = train[train.BPS > 0]
-train['UniqueSymbol'] = train['Code'] + train['FY']
-train['E_ROE'] = train['E_EPS'] / train.BPS
-train['A_ROE'] = train['A_EPS'] / train.BPS
-train['Error'] = train['E_ROE'] - train['A_ROE']
+if country == 'us':
+    use_gdp = False
+    gdp_path = f'data/{country}/PR.xlsx'
+    gdp_header = 8
+    gdp_lag = 0
+    rolling = 1
+    ts_length = -1
+    sector_len = 2
+elif country == 'kr':
+    use_gdp = True
+    gdp_path = f'data/{country}/QGDP.xlsx'
+    gdp_header = 13
+    gdp_lag = 2
+    rolling = 4
+    ts_length = -1
+    sector_len = 3
 
-# since information about earnings change as time, seperate date window as 90 days
-train['Year'] = train.FY.str.extract(r'(\d{4})')
-train['EDate'] = pd.to_datetime((train.Year.astype(int) + 1).astype(str) + '-03-31')
-train['DBtw'] = (train.EDate - pd.to_datetime(train.Date)).dt.days
-train['YearDiff'] = train.EDate.dt.year - pd.to_datetime(train.Date).dt.year
-train['MonthDiff'] = train.EDate.dt.month - pd.to_datetime(train.Date).dt.month
-train['totalDiff'] = train['YearDiff'] * 12 + train['MonthDiff']
-train['QBtw'] = (train['totalDiff'] / 3).astype(int)
+train = build_data(f'data/{country}/consenlist/*.csv'
+                   , use_gdp=use_gdp
+                   , gdp_path=gdp_path
+                   , gdp_header=gdp_header
+                   , gdp_lag=gdp_lag
+                   , rolling=rolling
+                   , ts_length=ts_length
+                   , sector_len=sector_len
+                   , country=country
+                   , use_cache=True)
 
-train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
-train['CutDate'] = train.Year + '-03-31'
+train = train.dropna(subset=['E_ROE', 'A_ROE'])
+
+if country == 'us':
+    train = train[train.A_EPS_1.abs() / train.BPS < 1]
+    # if previous year's error is less than 0.5%, remove the stock from the list
+    new_train = filter_guided_stock(train, 'Code', 'Error', 0.001)
+    # retain only guidance given stock
+    #train = train[train.Guidance == 1]
+    #UniqueSymbol = new_train.UniqueSymbol.unique()
+    UniqueSymbol = new_train.UniqueSymbol.unique()
+    #UniqueSymbol = train[~train.UniqueSymbol.isin(UniqueSymbol_total)].UniqueSymbol.unique()
+else:
+    UniqueSymbol = train.UniqueSymbol.unique()
 
 cache_ltable = dict()
 # we have no choice but have to update cache_lookup table explicitly
@@ -635,19 +663,16 @@ if os.path.exists(f'result/{country}/cache_ltable.json'):
     cache_ltable = {eval(k): v for k, v in cache_ltable.items()}
 
 else:
-    listoftable = list(product(train.Sector.unique(), train.Year.unique()))
+    listoftable = list(product(train.SectorClass.unique(), train.Year.unique()))
     for table in tqdm(listoftable):
-        term_spread_adj(*table)
+        cache_ltable[table] = term_spread_adj(*table)
 
     pd.DataFrame(cache_ltable).to_json(f'result/{country}/cache_ltable.json')
 
 if __name__ == '__main__':
-    UniqueSymbol = train.UniqueSymbol.unique()
-
     # (1) simple average
     dataset = []
 
-    
     dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
@@ -689,25 +714,9 @@ if __name__ == '__main__':
     MSFE_result.to_csv(f'./result/{country}/IMSE_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    # (4) Bias-Adjusted Mean (BAM)
-    #min_count = 3
-    #dataset = []
-    #multi_arg = list(product(UniqueSymbol, [min_count]))
-
-    #dataset = process_map(BAM_adp, multi_arg, max_workers=os.cpu_count()-1)
-
-    #dataset_pd = pd.concat(dataset)
-    #dataset_pd['MAFE'] = dataset_pd.Error.abs()
-    #MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
-    #print(MSFE_result)
-    #dataset_pd.to_csv('./result/BAM_adp.csv', encoding='utf-8-sig')
-    #MSFE_result.to_csv('./result/BAM_adp_MSFE.csv', encoding='utf-8-sig')
-
+    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 5
     year_range = 10
-
-    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
-    #min_count = 2
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
 
@@ -721,8 +730,9 @@ if __name__ == '__main__':
     MSFE_result.to_csv(f'./result/{country}/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (6) Iterated Mean Combination (IMC)
-    #min_count = 2
+    # (6) Iterated Mean Combination (IMC)
+    min_count = 5
+    year_range = 10
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
 
@@ -732,6 +742,5 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/IMC_adp_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/IMC_adp_MSFE_10y_{min_count}c_{year_range}y.csv', encoding='utf-8-sig')
-    '''
+    dataset_pd.to_csv(f'./result/{country}/IMC_adp.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMC_adp_MSFE.csv', encoding='utf-8-sig')

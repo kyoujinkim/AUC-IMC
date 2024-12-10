@@ -11,7 +11,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 #disable warnings
 import warnings
-from src.funs import build_data
+from src.funs import *
 warnings.filterwarnings('ignore')
 
 
@@ -165,6 +165,9 @@ def IMSE(x):
         df.PrevError += 0.01
 
     df['I_PrevError'] = df['PrevError'].pow(-1)
+    df_mean = df['I_PrevError'].mean()
+    df_std = df['I_PrevError'].std()
+    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 2 * df_std, upper=df_mean + 2 * df_std)
     df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
     data = ((df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum())
             - df.groupby('QBtw')['A_ROE'].mean())
@@ -370,29 +373,51 @@ def IMC(x):
     return fulldata
 
 country = 'us'
-#train = pd.read_csv('data/korea/total.csv', encoding='utf-8-sig')
-train = pd.read_csv(f'data/{country}/total.csv', encoding='utf-8-sig')
-train.BPS = train.BPS.astype(float)
-#droprow if BPS is less than 0
-train = train[train.BPS > 0]
-train['UniqueSymbol'] = train['Code'] + train['FY']
-train['E_ROE'] = train['E_EPS'] / train.BPS
-train['A_ROE'] = train['A_EPS'] / train.BPS
-train['Error'] = train['E_ROE'] - train['A_ROE']
+if country == 'us':
+    use_gdp = False
+    gdp_path = f'data/{country}/PR.xlsx'
+    gdp_header = 8
+    gdp_lag = 0
+    rolling = 1
+    ts_length = -1
+    sector_len = 2
+elif country == 'kr':
+    use_gdp = True
+    gdp_path = f'data/{country}/QGDP.xlsx'
+    gdp_header = 13
+    gdp_lag = 2
+    rolling = 4
+    ts_length = -1
+    sector_len = 3
 
-# since information about earnings change as time, seperate date window as 90 days
-train['Year'] = train.FY.str.extract(r'(\d{4})')
-train['EDate'] = pd.to_datetime((train.Year.astype(int) + 1).astype(str) + '-03-31')
-train['DBtw'] = (train.EDate - pd.to_datetime(train.Date)).dt.days
-train['YearDiff'] = train.EDate.dt.year - pd.to_datetime(train.Date).dt.year
-train['MonthDiff'] = train.EDate.dt.month - pd.to_datetime(train.Date).dt.month
-train['totalDiff'] = train['YearDiff'] * 12 + train['MonthDiff']
-train['QBtw'] = (train['totalDiff'] / 3).astype(int)
+print('build train data')
+train = build_data(f'data/{country}/consenlist/*.csv'
+                   , use_gdp=use_gdp
+                   , gdp_path=gdp_path
+                   , gdp_header=gdp_header
+                   , gdp_lag=gdp_lag
+                   , rolling=rolling
+                   , ts_length=ts_length
+                   , sector_len=sector_len
+                   , country=country
+                   , use_cache=True)
 
-train = train.drop(['YearDiff','MonthDiff','totalDiff'], axis=1)
+train = train.dropna(subset=['E_ROE', 'A_ROE'])
+
+if country == 'us':
+    train = train[train.A_EPS_1.abs() / train.BPS < 1]
+    # if previous year's error is less than 0.5%, remove the stock from the list
+    new_train = filter_guided_stock(train, 'Code', 'Error', 0.001)
+    # retain only guidance given stock
+    #new_train = train[train.Guidance == 1]
+    #UniqueSymbol = new_train.UniqueSymbol.unique()
+    UniqueSymbol = new_train.UniqueSymbol.unique()
+    #UniqueSymbol = train[~train.UniqueSymbol.isin(UniqueSymbol_total)].UniqueSymbol.unique()
+else:
+    UniqueSymbol = train.UniqueSymbol.unique()
+
 
 if __name__ == '__main__':
-    UniqueSymbol = train.UniqueSymbol.unique()
 
     # (1) simple average
     dataset = []
@@ -438,21 +463,6 @@ if __name__ == '__main__':
     MSFE_result.to_csv(f'./result/{country}/IMSE_MSFE.csv', encoding='utf-8-sig')
 
 
-    # (4) Bias-Adjusted Mean (BAM)
-    #min_count = 3
-    #dataset = []
-    #multi_arg = list(product(UniqueSymbol, [min_count]))
-
-    #dataset = process_map(BAM, multi_arg, max_workers=os.cpu_count()-1)
-
-    #dataset_pd = pd.concat(dataset)
-    #dataset_pd['MAFE'] = dataset_pd.Error.abs()
-    #MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
-    #print(MSFE_result)
-    #dataset_pd.to_csv('./result/BAM.csv', encoding='utf-8-sig')
-    #MSFE_result.to_csv('./result/BAM_MSFE.csv', encoding='utf-8-sig')
-
-
     # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 5
     dataset = []
@@ -479,8 +489,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd. Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv('./result/IMC_5c_10y.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv('./result/IMC_MSFE_5c_10y.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/IMC.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMC_MSFE.csv', encoding='utf-8-sig')
 
     '''#draw 3d surface plot with dataset_pd
     byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()
