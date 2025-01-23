@@ -333,7 +333,7 @@ def IMSE_adp(x):
     # limit upper and lower bound of I_PrevError as +- 2 stdev
     df_mean = df['I_PrevError'].mean()
     df_std = df['I_PrevError'].std()
-    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 2 * df_std, upper=df_mean + 2 * df_std)
+    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 5 * df_std, upper=df_mean + 5 * df_std)
     df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
     estIMSE = df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum()
 
@@ -615,10 +615,10 @@ def IMC_adp(x):
 country = 'us'
 if country == 'us':
     use_gdp = False
-    gdp_path = f'data/{country}/PR.xlsx'
-    gdp_header = 8
+    gdp_path = f'data/{country}/QGDP.xlsx'
+    gdp_header = 0
     gdp_lag = 0
-    rolling = 1
+    rolling = 4
     ts_length = -1
     sector_len = 2
 elif country == 'kr':
@@ -683,7 +683,7 @@ if __name__ == '__main__':
     MSFE_result.to_csv(f'./result/{country}/EW_adp_MSFE.csv', encoding='utf-8-sig')
 
 
-    # (2) smart consensus
+    '''# (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
@@ -696,10 +696,10 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/PBest_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/PBest_adp_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/PBest_adp_MSFE.csv', encoding='utf-8-sig')'''
 
 
-    # (3) Inverse MSE (IMSE)
+    '''# (3) Inverse MSE (IMSE)
     min_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -711,10 +711,10 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/IMSE_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMSE_adp_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMSE_adp_MSFE.csv', encoding='utf-8-sig')'''
 
 
-    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
+    '''# (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 5
     year_range = 10
     dataset = []
@@ -743,4 +743,4 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/IMC_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMC_adp_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMC_adp_MSFE.csv', encoding='utf-8-sig')'''

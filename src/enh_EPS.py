@@ -12,7 +12,7 @@ import configparser
 class Enhanced_EPS(object):
     def __init__(self):
         self.ucurve = dict()
-        self.min_count = 5
+        self.min_count = 3
         self.year_range = 10
 
     #set base data for calculation
@@ -20,7 +20,10 @@ class Enhanced_EPS(object):
         self.train = train
 
     def calc_ucurve(self, country, prdYear, train):
-        listoftable = list(product(train.SectorClass.unique(), prdYear))
+        # add np.nan to train.SectorClass.unique
+        unique_sectors = set(train.SectorClass.unique().tolist() + [np.nan])
+
+        listoftable = list(product(unique_sectors, prdYear))
         for table in tqdm(listoftable):
             self.ucurve[table] = term_spread_adj(*table, train=train)
 

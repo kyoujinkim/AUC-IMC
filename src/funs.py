@@ -47,7 +47,9 @@ def load_db(code):
 
     connection_string = f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOSTNAME}/{MYSQL_DATABASE}'
     engine = create_engine(connection_string)
+    # set data type when read from db
     db = pd.read_sql(f"SELECT * FROM cache_enh_eps WHERE Code = '{code}'", con=engine)
+    db.Year = db.Year.astype(str)
 
     return db
 
@@ -256,6 +258,7 @@ def build_data(path: str = './data/consenlist/*.csv'
     df['MonthDiff'] = df.equalEDate.dt.month - df.Date.dt.month
     df['totalDiff'] = df['YearDiff'] * 12 + df['MonthDiff']
     df['EQBtw'] = (df['totalDiff'] / 3).astype(int)
+    df['Year'] = df.Year.astype(str)
 
     df = df.drop(['YearDiff', 'MonthDiff', 'totalDiff', 'equalEDate'], axis=1)
     df['CutDate'] = df['FilingDeadline']
@@ -269,7 +272,13 @@ def build_data(path: str = './data/consenlist/*.csv'
         gdp_roll = gdp_roll.reindex(pd.date_range(gdp_roll.index[0], date_max, freq='D'))
         gdp_roll = gdp_roll.ffill()
 
-        df['Gdp'] = df.Date.map(gdp_roll.iloc[:,0])
+        if 'FX' in gdp_path:
+            # use current / 1 year average value
+            gdp_roll = gdp_roll / gdp_roll.rolling(255).mean()
+            df['Gdp'] = df.Date.map(gdp_roll.iloc[:,0])
+
+        else:
+            df['Gdp'] = df.Date.map(gdp_roll.iloc[:,0])
     else:
         df['Gdp'] = 0
 
@@ -325,15 +334,15 @@ def eps_growth(x, col_name='EPS_Est', caption=False):
         return np.nan
 
 
-def result_formatter(data, code, df, df_copy, popt_bf, popt_af):
+def result_formatter(data, code, df, popt_bf, popt_af):
     data['Code'] = code
     data['Sector'] = df.Sector.iloc[-1]
     data['Popt'] = [[popt_bf, popt_af]] * len(data)
     data['BPS'] = df.BPS.iloc[0]
     data['PeriodEndDate'] = df.PeriodEndDate.iloc[0]
     data['EPS_Actual'] = df.A_EPS.iloc[0]
-    data['EPS_1Y'] = df_copy['EPS_1Y'].mean()
-    data['EPS_2Y'] = df_copy['EPS_2Y'].mean()
+    data['EPS_1Y'] = df['EPS_1Y'].mean()
+    data['EPS_2Y'] = df['EPS_2Y'].mean()
 
     return data
 
@@ -341,6 +350,7 @@ def result_formatter_calc_growth(data):
     data['EPS_Est'] = data.Est * data.BPS
     data.EPS_Est = data.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x.QBtw == 0) else x.EPS_Est, axis=1)
     data['EPS_EW'] = data.EW * data.BPS
+    data.EPS_EW = data.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x.QBtw == 0) else x.EPS_EW, axis=1)
 
     data['Est'] = data['EPS_Est'] / data['BPS']
     data['GEst'] = data['Est'] - data['EW_prev']
@@ -367,7 +377,7 @@ def IMC_adp_cache(x):
     ucurve = x[3]
 
     df = train[train.UniqueSymbol == symbol]
-    df_copy = df.copy()
+    df['E_ROE_o'] = df['E_ROE'].copy()
 
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
@@ -375,41 +385,48 @@ def IMC_adp_cache(x):
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-    df['E_ROE'] = (df['E_ROE']
-                   - df.apply(lambda x:
-                              term_spread(x, *popt_bf)
-                              if x.Date <= x.CutDate
-                              else term_spread(x, *popt_af)
-                              , axis=1).fillna(0))
+    sub_train = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    sub_train['E_ROE_af'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0)
+    sub_train['E_ROE_bf'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0)
+
+    # if adjusted ROE's error is become larger, do not adjust
+    if (sub_train['E_ROE_bf'] - sub_train['A_ROE']).abs().mean() > (sub_train['E_ROE'] - sub_train['A_ROE']).abs().mean():
+        adj = False
+    else:
+        adj = True
+
+    if adj:
+        df['E_ROE'] = (df['E_ROE']
+                       - df.apply(lambda x:
+                                  term_spread(x, *popt_bf)
+                                  if x.Date <= x.CutDate
+                                  else term_spread(x, *popt_af)
+                                  , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df_copy = df_copy.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
+
     Q_result = []
     S_result = []
 
     for Q in df.QBtw.unique():
         if Q < 4:
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - year_range))
-                             ]
+            tempdata = sub_train
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            if adj:
+                tempdata['E_ROE'] = tempdata['E_ROE_af']
         else:
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - year_range - 1))
-                             ]
+            tempdata = sub_train[(train.Year <= str(int(df.Year.iloc[0]) - 2))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+            if popt_bf[0] == 0:
+                tempdata = tempdata[(tempdata.QBtw == Q)]
+            if adj:
+                tempdata['E_ROE'] = tempdata['E_ROE_bf']
 
-        if Q < 4:
-            if pd.isna(popt_af[0]):
-                tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
-        else:
-            if pd.isna(popt_bf[0]):
-                tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         if len(tempdata) > 0:
@@ -471,19 +488,20 @@ def IMC_adp_cache(x):
         Scoeffset_mean = pd.Series([1] * len(df.QBtw.unique()), index=df.QBtw.unique())
 
     Qcoeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
+
     # with slope and intercept, calculate BAM
     estIMC_step1 = pd.DataFrame(df.groupby('QBtw')['E_ROE'].mean())
     estIMC = estIMC_step1.apply(lambda x: apply_bam(x, Qcoeffset), axis=1)
 
-    estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
-    estEW_prev = pd.DataFrame(df_copy.groupby('QBtw')['A_EPS_1'].last() / df_copy.groupby('QBtw')['BPS'].last())
+    estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
 
     eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
 
     data = pd.concat([estIMC, estEW, estEW_prev, Scoeffset_mean, Qcoeffset.Slope, eqbtw], axis=1)
     data.columns = ['Est', 'EW', 'EW_prev', 'SCoeff', 'QCoeff', 'EQBtw']
 
-    data = result_formatter(data, code, df, df_copy, popt_bf, popt_af)
+    data = result_formatter(data, code, df, popt_bf, popt_af)
 
     return data
 
@@ -499,7 +517,7 @@ def IMSE_adp_cache(x):
     ucurve = x[3]
 
     df = train[train.UniqueSymbol == symbol]
-    df_copy = df.copy()
+    df['E_ROE_o'] = df['E_ROE'].copy()
 
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
@@ -507,36 +525,46 @@ def IMSE_adp_cache(x):
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-    df['E_ROE'] = (df['E_ROE']
-                   - df.apply(lambda x:
-                              term_spread(x, *popt_bf)
-                              if x.Date <= x.CutDate
-                              else term_spread(x, *popt_af)
-                              , axis=1).fillna(0))
+    sub_train = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+    sub_train['E_ROE_af'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0)
+    sub_train['E_ROE_bf'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0)
+
+    # if adjusted ROE's error is become larger, do not adjust
+    if (sub_train['E_ROE_bf'] - sub_train['A_ROE']).abs().mean() > (sub_train['E_ROE'] - sub_train['A_ROE']).abs().mean():
+        adj = False
+    else:
+        adj = True
+
+    #tadj = False
+    if adj:
+        df['E_ROE'] = (df['E_ROE']
+                       - df.apply(lambda x:
+                                  term_spread(x, *popt_bf)
+                                  if x.Date <= x.CutDate
+                                  else term_spread(x, *popt_af)
+                                  , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df_copy = df_copy.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+
     Q_result = []
 
     for Q in df.QBtw.unique():
         if Q < 4:
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+            tempdata = sub_train
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-        else:
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-
-        if Q < 4:
             if popt_af[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+            if adj:
+                tempdata['E_ROE'] = tempdata['E_ROE_af']
         else:
+            tempdata = sub_train[(train.Year <= str(int(df.Year.iloc[0]) - 2))]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
             if popt_bf[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
+            if adj:
+                tempdata['E_ROE'] = tempdata['E_ROE_bf']
+
         tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
         # list to append previous year's error rate by analyst
@@ -574,19 +602,19 @@ def IMSE_adp_cache(x):
     # limit upper and lower bound of I_PrevError as +- 2 stdev
     df_mean = df['I_PrevError'].mean()
     df_std = df['I_PrevError'].std()
-    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 2 * df_std, upper=df_mean + 2 * df_std)
+    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 5 * df_std, upper=df_mean + 5 * df_std)
     df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
     estIMSE = df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum()
 
-    estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
-    estEW_prev = pd.DataFrame(df_copy.groupby('QBtw')['A_EPS_1'].last() / df_copy.groupby('QBtw')['BPS'].last())
+    estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
 
     eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
 
     data = pd.concat([estIMSE, estEW, estEW_prev, eqbtw], axis=1)
     data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
 
-    data = result_formatter(data, code, df, df_copy, popt_bf, popt_af)
+    data = result_formatter(data, code, df, popt_bf, popt_af)
 
     return data
 
@@ -601,7 +629,7 @@ def EW_adp_cache(x):
     ucurve = x[3]
 
     df = train[train.UniqueSymbol == symbol]
-    df_copy = df.copy()
+    df['E_ROE_o'] = df['E_ROE'].copy()
 
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
@@ -619,15 +647,15 @@ def EW_adp_cache(x):
 
     estAdpEW = df.groupby('QBtw')['E_ROE'].mean()
 
-    estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
-    estEW_prev = pd.DataFrame(df_copy.groupby('QBtw')['A_EPS_1'].last() / df_copy.groupby('QBtw')['BPS'].last())
+    estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
 
     eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
 
     data = pd.concat([estAdpEW, estEW, estEW_prev, eqbtw], axis=1)
     data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
 
-    data = result_formatter(data, code, df, df_copy, popt_bf, popt_af)
+    data = result_formatter(data, code, df, popt_bf, popt_af)
 
     return data
 
@@ -639,21 +667,21 @@ def EW_cache(x):
     train = load_db(code)
 
     df = train[train.UniqueSymbol == symbol]
-    df_copy = df.copy()
+    df['E_ROE_o'] = df['E_ROE'].copy()
 
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
 
     estEW = df.groupby('QBtw')['E_ROE'].mean()
 
     # estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
-    estEW_prev = pd.DataFrame(df_copy.groupby('QBtw')['A_EPS_1'].last() / df_copy.groupby('QBtw')['BPS'].last())
+    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
 
     eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
 
     data = pd.concat([estEW, estEW, estEW_prev, eqbtw], axis=1)
     data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
 
-    data = result_formatter(data, code, df, df_copy, 0, 0)
+    data = result_formatter(data, code, df, 0, 0)
 
     return data
 
@@ -696,19 +724,27 @@ def merged_ts(total_ts, year:int, prddate:str='2024-11-11'):
     return ts
 
 
-def build_gdp_scenario(model, gdp_data_path, use_prd:bool=True, use_gdp:bool=True):
+def build_gdp_scenario(model, gdp_data_path, use_prd:bool=True, use_gdp:bool=True, gdp_lag:int=0, rolling:int=1, custom_data=None):
 
     if use_gdp:
         # save total term spread by gdp and time delta to csv
         gdp = pd.read_excel(gdp_data_path, sheet_name='act', header=13, index_col=0, parse_dates=True).dropna(how='all', axis=0).dropna(axis=1)
-        gdp.index = gdp.index + pd.DateOffset(months=2)
+        gdp.index = gdp.index + pd.DateOffset(months=gdp_lag)
         gdp.columns = ['gdp']
         if use_prd:
-            gdp_prd = pd.read_excel(gdp_data_path, sheet_name='prd', header=0, index_col=0, parse_dates=True)
+            if custom_data is None:
+                gdp_prd = pd.read_excel(gdp_data_path, sheet_name='prd', header=0, index_col=0, parse_dates=True)
+            else:
+                # custom_data = [0.3, 0.5, 0.6, 0.7]
+                gdp_prd = custom_data
+                gdp_prd.columns = ['gdp']
             # append gdp_prd to gdp's row
+            if 'FX' in gdp_data_path:
+                gdp_prd = gdp_prd / gdp.loc[gdp.index[-1] - pd.DateOffset(years=1):gdp.index[-1]].mean()
+                gdp = gdp / gdp.rolling(255).mean()
             gdp = pd.concat([gdp, gdp_prd], axis=0)
-        gdp_roll = gdp.rolling(4).mean().dropna()
-        gdp_roll = gdp_roll.iloc[-7:]
+        gdp_roll = gdp.rolling(rolling).mean().dropna()
+        gdp_roll = gdp_roll.iloc[-5:]
 
         total_ts = []
         for key in tqdm(model.ucurve.keys()):

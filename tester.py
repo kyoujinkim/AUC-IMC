@@ -167,7 +167,7 @@ def IMSE(x):
     df['I_PrevError'] = df['PrevError'].pow(-1)
     df_mean = df['I_PrevError'].mean()
     df_std = df['I_PrevError'].std()
-    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 2 * df_std, upper=df_mean + 2 * df_std)
+    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 3 * df_std, upper=df_mean + 3 * df_std)
     df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
     data = ((df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum())
             - df.groupby('QBtw')['A_ROE'].mean())
@@ -419,7 +419,7 @@ else:
 
 if __name__ == '__main__':
 
-    # (1) simple average
+    '''# (1) simple average
     dataset = []
 
     dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
@@ -445,7 +445,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/PBest.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/PBest_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/PBest_MSFE.csv', encoding='utf-8-sig')'''
 
 
     # (3) Inverse MSE (IMSE)
@@ -463,7 +463,7 @@ if __name__ == '__main__':
     MSFE_result.to_csv(f'./result/{country}/IMSE_MSFE.csv', encoding='utf-8-sig')
 
 
-    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
+    '''# (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 5
     dataset = []
     multi_arg = list(product(UniqueSymbol, [min_count]))
@@ -490,7 +490,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/IMC.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMC_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMC_MSFE.csv', encoding='utf-8-sig')'''
 
     '''#draw 3d surface plot with dataset_pd
     byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()
