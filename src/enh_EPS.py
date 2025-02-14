@@ -12,7 +12,7 @@ import configparser
 class Enhanced_EPS(object):
     def __init__(self):
         self.ucurve = dict()
-        self.min_count = 3
+        self.min_count = 2
         self.year_range = 10
 
     #set base data for calculation

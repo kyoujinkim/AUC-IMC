@@ -5,6 +5,8 @@ from glob import glob
 from itertools import product
 
 import datetime as dt
+
+import duckdb
 import numpy as np
 from numpy import nan
 import pandas as pd
@@ -34,6 +36,16 @@ def save_db(db):
     connection_string = f'mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOSTNAME}/{MYSQL_DATABASE}'
     engine = create_engine(connection_string)
     db.to_sql(con=engine, name='cache_enh_eps', if_exists='replace', index=False)
+
+
+def load_duckdb(code):
+    query = f"""SELECT * 
+        FROM read_parquet('./cache/cache.parquet')
+        WHERE uniquesymbol='{code}'"""
+
+    data = duckdb.sql(query).to_df()
+
+    return data
 
 
 def load_db(code):
@@ -171,7 +183,22 @@ def EW(x, train):
 
     return fulldata
 
+
+def get_quarter(x, lag:int=1):
+    if x.month <= 3 + lag and x.month > 0 + lag:
+        return f'1Q{x.year}'
+    elif x.month <= 6 + lag:
+        return f'2Q{x.year}'
+    elif x.month <= 9 + lag:
+        return f'3Q{x.year}'
+    elif x.month <= 12 + lag:
+        return f'4Q{x.year}'
+    else:
+        return f'4Q{x.year-1}'
+
+
 def build_data(path: str = './data/consenlist/*.csv'
+               , period: str = 'Y'
                , use_gdp: bool = True
                , gdp_path: str = './data/QGDP.xlsx'
                , gdp_header: int = 0
@@ -184,6 +211,7 @@ def build_data(path: str = './data/consenlist/*.csv'
     '''
     build dataset for calculate Smart Consensus
     :param path: estimation data path
+    :param period: period type - 'Y' for year, 'Q' for quarter
     :param gdppath: economic data path
     :param gdp_header: header row - 13 for QuantiWise data, 0 for Refinitiv data
     :param gdp_lag: lagged month for economic data
@@ -196,17 +224,24 @@ def build_data(path: str = './data/consenlist/*.csv'
         raise ValueError('country should be either kr or us')
 
     if use_cache:
-        if os.path.exists('./cache/cache.csv'):
-            return pd.read_csv('./cache/cache.csv', encoding='utf-8-sig', index_col=0
-                               , dtype={'Year':str, 'Sector':str, 'SectorClass':str})
+        if os.path.exists('./cache/cache.parquet'):
+            return pd.read_parquet('./cache/cache.parquet', engine="pyarrow")
 
     consenlist = glob(path)
+    if period == 'Y':
+        consenlist = [file for file in consenlist if 'FQ' not in file]
+    elif period == 'Q':
+        consenlist = [file for file in consenlist if 'FQ' in file]
+    else:
+        raise ValueError('period should be either Y or Q')
+
     for idx, file in enumerate(consenlist):
         if idx == 0:
             df = pd.read_csv(file)
         else:
             df = pd.concat([df, pd.read_csv(file)], ignore_index=True, axis=0)
 
+    df = df.dropna(how='all')
     if country == 'us':
         df = df.rename(columns={'Instrument': 'Code'
             , 'Analyst Name': 'Analyst'
@@ -218,17 +253,21 @@ def build_data(path: str = './data/consenlist/*.csv'
         df = df.dropna(subset='Year')
         df.PeriodEndDate = pd.to_datetime(df.PeriodEndDate)
         # if PeriodEndDate is less than july, use next year. Else, use current year
-        df['Year'] = df.apply(lambda x: x.Year - 1 if x.PeriodEndDate.month < 7 else x.Year, axis=1)
+        df['Year'] = np.where(df['PeriodEndDate'].dt.month < 7, df['Year'].astype(int) - 1, df['Year'])
         df.Year = df.Year.astype(int).astype(str)
     else:
-        df['PeriodEndDate'] = pd.to_datetime(df.Year.astype(str) + '-12-31')
+        df['PeriodEndDate'] = pd.to_datetime(df.Year.astype(int).astype(str) + '-12-31')
 
     df.Date = pd.to_datetime(df.Date)
 
-    df['FY'] = df.Year.astype(str) + 'AS'
+    if period == 'Q':
+        df['FY'] = pd.to_datetime(df.PeriodEndDate).apply(lambda x: get_quarter(x, lag=1))
+    else:
+        df['FY'] = df.Year.astype(str) + 'AS'
+
     df['Security'] = df.Security.replace(r'\([^)]*\)','', regex=True)
     df['FilingDeadline'] = df.PeriodEndDate - MonthEnd(9)
-    df['A_EPS_1'] = df.apply(lambda x: x.EPS_1Y if x.Date > x.FilingDeadline else x.EPS_2Y, axis=1)
+    df['A_EPS_1'] = np.where(df['Date'] < df['FilingDeadline'], df['EPS_1Y'], df['EPS_2Y'])
 
     df = df.dropna(subset=['BPS', 'E_EPS'])
     df = df.drop_duplicates()
@@ -287,7 +326,7 @@ def build_data(path: str = './data/consenlist/*.csv'
     else:
         df = df[df.Year.astype(int) >= int(df.Year.max()) - (ts_length+5)] # add some margin on length of years
 
-    df.to_csv('./cache/cache.csv', encoding='utf-8-sig')
+    df.to_parquet('./cache/cache.parquet', engine="pyarrow", compression="snappy")
 
     return df
 
@@ -387,7 +426,7 @@ def IMC_adp_cache(x):
 
     sub_train = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))]
     sub_train['E_ROE_af'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0)
     sub_train['E_ROE_bf'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0)
 
@@ -413,7 +452,7 @@ def IMC_adp_cache(x):
 
     for Q in df.QBtw.unique():
         if Q < 4:
-            tempdata = sub_train
+            tempdata = sub_train[(train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
             if popt_af[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
@@ -527,7 +566,7 @@ def IMSE_adp_cache(x):
 
     sub_train = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))]
     sub_train['E_ROE_af'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0)
     sub_train['E_ROE_bf'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0)
 
@@ -551,7 +590,7 @@ def IMSE_adp_cache(x):
 
     for Q in df.QBtw.unique():
         if Q < 4:
-            tempdata = sub_train
+            tempdata = sub_train[(train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
             if popt_af[0] == 0:
                 tempdata = tempdata[(tempdata.QBtw == Q)]
@@ -662,7 +701,7 @@ def EW_adp_cache(x):
 
 def EW_cache(x):
 
-    symbol = x[0]
+    symbol = x
     code = symbol[:-6]
     train = load_db(code)
 
@@ -711,15 +750,22 @@ def merged_ts(total_ts, year:int, prddate:str='2024-11-11'):
         for column in sector_tmp.columns:
             column_date = pd.to_datetime(column)
             sector_tmp.loc[sector_tmp.index < column_date, column] = np.nan
-        basecolumn = sector + '_' + sector_tmp.columns[sector_tmp.columns < prddate][-1]
-        sector_tmp.columns = sector + '_' + sector_tmp.columns
-        columns = sector_tmp.columns[::-1]
 
-        # Create a new column with the merged data
-        sector_tmp[sector] = sector_tmp[columns].bfill(axis=1).iloc[:, 0]
-        tmp_sector_ts.append(sector_tmp[[sector, basecolumn]])
+        try:
+            basecolumn = sector + '_' + sector_tmp.columns[sector_tmp.columns > prddate].min()
+            sector_tmp.columns = sector + '_' + sector_tmp.columns
+            columns = sector_tmp.columns[::-1]
 
-    ts = pd.concat(tmp_sector_ts, axis=1).dropna().sort_index()
+            # Create a new column with the merged data
+            sector_tmp[sector] = sector_tmp[columns].bfill(axis=1).iloc[:, 0]
+            tmp_sector_ts.append(sector_tmp[[sector, basecolumn]])
+        except:
+            pass
+
+    if len(tmp_sector_ts) > 0:
+        ts = pd.concat(tmp_sector_ts, axis=1).dropna().sort_index()
+    else:
+        ts = pd.DataFrame()
 
     return ts
 

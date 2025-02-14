@@ -3,13 +3,6 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
-        <entry key="\data\kr\code.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
         <entry key="\data\kr\consenlist\eps_2003.csv">
           <value>
             <Attribute>
@@ -102,27 +95,6 @@
           </value>
         </entry>
         <entry key="\data\us\list_total.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
-        <entry key="\result\kr\result_MSFE\result_pivot.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
-        <entry key="\result\kr\result_MSFE\result_pv.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
-        <entry key="\result\kr\result_MSFE\result_pv_base.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

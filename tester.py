@@ -41,7 +41,10 @@ def apply_imc(x, tempset):
 
 def EW(x):
 
-    symbol = x
+    symbol = x[0]
+    code = symbol[:-6]
+    train = load_db(code)
+
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     EW = df.groupby('QBtw')['E_ROE'].mean()
@@ -375,6 +378,7 @@ def IMC(x):
 country = 'us'
 if country == 'us':
     use_gdp = False
+    period = 'Q'
     gdp_path = f'data/{country}/PR.xlsx'
     gdp_header = 8
     gdp_lag = 0
@@ -383,6 +387,7 @@ if country == 'us':
     sector_len = 2
 elif country == 'kr':
     use_gdp = True
+    period = 'Y'
     gdp_path = f'data/{country}/QGDP.xlsx'
     gdp_header = 13
     gdp_lag = 2
@@ -390,39 +395,44 @@ elif country == 'kr':
     ts_length = -1
     sector_len = 3
 
-print('build train data')
-train = build_data(f'data/{country}/consenlist/*.csv'
-                   , use_gdp=use_gdp
-                   , gdp_path=gdp_path
-                   , gdp_header=gdp_header
-                   , gdp_lag=gdp_lag
-                   , rolling=rolling
-                   , ts_length=ts_length
-                   , sector_len=sector_len
-                   , country=country
-                   , use_cache=True)
-
-train = train.dropna(subset=['E_ROE', 'A_ROE'])
-
-if country == 'us':
-    train = train[train.A_EPS_1.abs() / train.BPS < 1]
-    # if previous year's error is less than 0.5%, remove the stock from the list
-    new_train = filter_guided_stock(train, 'Code', 'Error', 0.001)
-    # retain only guidance given stock
-    #new_train = train[train.Guidance == 1]
-    #UniqueSymbol = new_train.UniqueSymbol.unique()
-    UniqueSymbol = new_train.UniqueSymbol.unique()
-    #UniqueSymbol = train[~train.UniqueSymbol.isin(UniqueSymbol_total)].UniqueSymbol.unique()
-else:
-    UniqueSymbol = train.UniqueSymbol.unique()
-
 
 if __name__ == '__main__':
 
-    '''# (1) simple average
+    print('build train data')
+    # if os.path.exists(f'./cache/cache.parquet'):
+    #    # remove cache
+    #    os.remove(f'./cache/cache.parquet')
+
+    train = build_data(f'data/{country}/consenlist/*.csv'
+                       , period=period
+                       , use_gdp=use_gdp
+                       , gdp_path=gdp_path
+                       , gdp_header=gdp_header
+                       , gdp_lag=gdp_lag
+                       , rolling=rolling
+                       , ts_length=ts_length
+                       , sector_len=sector_len
+                       , country=country
+                       , use_cache=True)
+
+    if country == 'us':
+        new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
+        # if previous year's error is less than 0.5%, remove the stock from the list
+        new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
+        # retain only guidance given stock
+        if period == 'Y':
+            new_train = new_train[new_train.Guidance == 1]
+        UniqueSymbol = new_train.UniqueSymbol.unique()
+    else:
+        new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
+        # if previous year's error is less than 0.5%, remove the stock from the list
+        new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
+        UniqueSymbol = new_train.UniqueSymbol.unique()
+
+    # (1) simple average
     dataset = []
 
-    dataset = process_map(EW, UniqueSymbol, max_workers=os.cpu_count()-1)
+    dataset = process_map(EW_cache, UniqueSymbol, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
@@ -432,7 +442,7 @@ if __name__ == '__main__':
     MSFE_result.to_csv(f'./result/{country}/EW_MSFE.csv', encoding='utf-8-sig')
 
 
-    # (2) smart consensus
+    '''# (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
@@ -445,7 +455,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/PBest.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/PBest_MSFE.csv', encoding='utf-8-sig')'''
+    MSFE_result.to_csv(f'./result/{country}/PBest_MSFE.csv', encoding='utf-8-sig')
 
 
     # (3) Inverse MSE (IMSE)
@@ -460,7 +470,7 @@ if __name__ == '__main__':
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
     dataset_pd.to_csv(f'./result/{country}/IMSE.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMSE_MSFE.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMSE_MSFE.csv', encoding='utf-8-sig')'''
 
 
     '''# (5) Bias-Adjusted Mean Adjusted (BAM_adj)

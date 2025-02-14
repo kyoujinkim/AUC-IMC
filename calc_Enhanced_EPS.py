@@ -24,7 +24,7 @@ def get_sector_growth_rate(x, est_name='earning_Est', act_name='earning_1Y', cap
         return None
 
 
-def groupby_sector(df, df_sector, col_name, extend, filename):
+def groupby_sector(df, df_sector, col_name, prddate, extend, filename):
     '''
     Sector별로 groupby하여 median값을 구함
     :param df: 데이터를 포함한 DataFrame
@@ -45,10 +45,16 @@ def groupby_sector(df, df_sector, col_name, extend, filename):
     else:
         df['EPS_1YEW'] = df['EPS_1Y']
     # 섹터 단위 계산을 위해 net earning 계산
-    df['earning_Est'] = df['shares'] * df['EPS_Est']
-    df['earning_EW'] = df['shares'] * df['EPS_EW']
-    df['earning_1Y'] = df['shares'] * df.apply(lambda x: x['EPS_2Y'] if pd.isna(x['EPS_1Y']) else x['EPS_1Y'], axis=1)
-    df['earning_1YEW'] = df['shares'] * df.apply(lambda x: x['EPS_2Y'] if pd.isna(x['EPS_1YEW']) else x['EPS_1YEW'], axis=1)
+    # select most recent col[sh_date] according to prddate
+    sh_cols = [col for col in df.columns if 'sh' in col]
+    sh_curr = [col for col in sh_cols if pd.to_datetime(col[2:]) <= prddate][-1]
+    sh_prev = [col for col in sh_cols if pd.to_datetime(col[2:]) <= prddate - pd.DateOffset(years=1)][-1]
+    sh_pprev = [col for col in sh_cols if pd.to_datetime(col[2:]) <= prddate - pd.DateOffset(years=2)][-1]
+
+    df['earning_Est'] = df[sh_curr] * df['EPS_Est']
+    df['earning_EW'] = df[sh_curr] * df['EPS_EW']
+    df['earning_1Y'] = df.apply(lambda x: x[sh_pprev] if pd.isna(x['EPS_1Y']) else x[sh_prev], axis=1) * df.apply(lambda x: x['EPS_2Y'] if pd.isna(x['EPS_1Y']) else x['EPS_1Y'], axis=1)
+    df['earning_1YEW'] = df.apply(lambda x: x[sh_pprev] if pd.isna(x['EPS_1YEW']) else x[sh_prev], axis=1) * df.apply(lambda x: x['EPS_2Y'] if pd.isna(x['EPS_1YEW']) else x['EPS_1YEW'], axis=1)
     df['earning_1Y_caption'] = df.apply(lambda x: -1 if pd.isna(x['EPS_1Y']) else 1, axis=1)
     df['earning_1YEW_caption'] = df.apply(lambda x: -1 if pd.isna(x['EPS_1YEW']) else 1, axis=1)
 
@@ -102,13 +108,14 @@ def groupby_sector(df, df_sector, col_name, extend, filename):
 
 if __name__ == '__main__':
 
-    country = 'kr'
-    prddate = '2025-01-15'  # '2024-07-18' '2024-08-19'
+    country = 'us'
+    prddate = '2025-01-27'  # '2024-07-18' '2024-08-19'
 
-    prdYears = [2024,2025]
-    extend = [False,True]
+    prdYears = [2025]#,2025]
+    extend = [False]#,True]
 
     if country == 'us':
+        period = 'Q'
         use_gdp = False
         gdp_path = None
         use_custom_gdp = False
@@ -121,9 +128,10 @@ if __name__ == '__main__':
         model_list = ['IMSE_adp']
         sector_groupby_len = 6
     elif country == 'kr':
+        period = 'Y'
         use_gdp = True
         gdp_path = f'data/{country}/QGDP.xlsx'
-        use_custom_gdp = False
+        use_custom_gdp = True
         gdp_header = 13
         gdp_lag = 2
         rolling = 4
@@ -131,8 +139,9 @@ if __name__ == '__main__':
         ts_length = 10
         sector_len = 3
         model_list = ['IMC_adp']
-        sector_groupby_len = 7
+        sector_groupby_len = 5
     elif country == 'kr2':
+        period = 'Y'
         use_gdp = True
         gdp_path = f'data/{country}/FX.xlsx'
         use_custom_gdp = False
@@ -152,6 +161,7 @@ if __name__ == '__main__':
         os.remove(f'./cache/cache.csv')
 
     train = build_data(f'data/{country}/consenlist/*.csv'
+                       , period=period
                        , use_gdp=use_gdp
                        , gdp_path=gdp_path
                        , gdp_header=gdp_header
@@ -163,7 +173,7 @@ if __name__ == '__main__':
                        , use_cache=True)
     sector_name = pd.read_csv(f'data/{country}/industry_map.csv', encoding='utf-8-sig', dtype=str).set_index('Code')
     shares = pd.read_excel(f'data/{country}/shares.xlsx', sheet_name='share', index_col=0)
-    shares = shares.loc[pd.to_numeric(shares.iloc[:,0], errors='coerce').dropna().index]
+    shares = shares.loc[pd.to_numeric(shares.iloc[:,-1], errors='coerce').dropna().index]
 
     if country == 'us':
         new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
@@ -244,22 +254,34 @@ if __name__ == '__main__':
             # data 저장
             result.to_csv(f'./result/{country}/{model_name}_{prdyear}_{prddate}.csv', encoding='utf-8-sig')
 
-            result['shares'] = shares
+            for col in shares.columns:
+                col_name = 'sh' + col.strftime('%Y-%m-%d')
+                result[col_name] = shares[col]
 
             # Sector별로 median값을 구함
-            result_sector = groupby_sector(result, sector_name, 'EQBtw', extend, f'./result/{country}/{model_name}_{prdyear-1}_{prddate}.csv')
+            result_sector = groupby_sector(result
+                                           , sector_name
+                                           , 'EQBtw'
+                                           , dt.datetime(prdyear, 12, 31)
+                                           , extend
+                                           , f'./result/{country}/{model_name}_{prdyear-1}_{prddate}.csv')
             # Sector별로 median값을 구한 결과를 csv로 저장
             result_sector.to_csv(f'./result/{country}/{model_name}_EQBtw_{prdyear}_sector_{prddate}.csv', encoding='utf-8-sig')
 
             # 최근 QBtw에 대한 snapshot 형태 data 제작
             result_snapshot = result.reset_index().set_index(['Code', 'QBtw']).loc[result.groupby('Code').QBtw.min().reset_index().set_index(['Code','QBtw']).index]
             # Sector별로 median값을 구함
-            result_sector = groupby_sector(result_snapshot, sector_name, 'QBtw', extend, f'./result/{country}/{model_name}_{prdyear-1}_{prddate}.csv')
+            result_sector = groupby_sector(result_snapshot
+                                           , sector_name
+                                           , 'QBtw'
+                                           , dt.datetime(prdyear, 12, 31)
+                                           , extend
+                                           , f'./result/{country}/{model_name}_{prdyear-1}_{prddate}.csv')
             # result를 최근 'EQBtw'에 대하여 snapshot 형태로 groupby하여 저장
             result_sector.to_csv(f'./result/{country}/{model_name}_QBtw_{prdyear}_{prddate}.csv', encoding='utf-8-sig')
 
     print('Step1 Finished')
-
+    quit()
     # step2: save total term spread by gdp and time delta to csv
     total_ts_pd = build_gdp_scenario(model
                                      , gdp_data_path=gdp_path
