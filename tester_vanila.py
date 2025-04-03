@@ -42,8 +42,7 @@ def apply_imc(x, tempset):
 def EW(x):
 
     symbol = x[0]
-    code = symbol[:-6]
-    train = load_db(code)
+    q_align = x[1]
 
     df = train[train.UniqueSymbol == symbol]
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
@@ -61,8 +60,15 @@ def PBest(x):
 
     symbol = x[0]
     star_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
+    year = symbol[-6:-2]
+    if 'Q' in year:
+        quarter = year[:2]
+    else:
+        quarter = 'NA'
+
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     Q_result = []
 
@@ -79,6 +85,8 @@ def PBest(x):
                              & (train.Year >= str(int(df.Year.iloc[0]) - 3))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         # list to append previous year's error rate by analyst
         tempset = []
@@ -117,8 +125,15 @@ def IMSE(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
+    year = symbol[-6:-2]
+    if 'Q' in year:
+        quarter = year[:2]
+    else:
+        quarter = 'NA'
+
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     Q_result = []
 
@@ -135,6 +150,8 @@ def IMSE(x):
                              & (train.Year >= str(int(df.Year.iloc[0]) - 3))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         # list to append previous year's error rate by analyst
         tempset = []
@@ -186,8 +203,15 @@ def BAM(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
+    year = symbol[-6:-2]
+    if 'Q' in year:
+        quarter = year[:2]
+    else:
+        quarter = 'NA'
+
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     Q_result = []
 
@@ -195,15 +219,17 @@ def BAM(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 5))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         # list to append previous year's error rate by analyst
         tempset = tempdata.groupby(['Year'])[['E_ROE', 'A_ROE']].mean()
@@ -237,8 +263,15 @@ def BAM_adj(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
+    year = symbol[-6:-2]
+    if 'Q' in year:
+        quarter = year[:2]
+    else:
+        quarter = 'NA'
+
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     Q_result = []
 
@@ -255,6 +288,8 @@ def BAM_adj(x):
                              & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         # list to append previous year's error rate by analyst
         lenYear = len(tempdata.Year.unique())
@@ -291,8 +326,15 @@ def IMC(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
+    year = symbol[-6:-2]
+    if 'Q' in year:
+        quarter = year[:2]
+    else:
+        quarter = 'NA'
+
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
@@ -312,6 +354,8 @@ def IMC(x):
                              & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                              & (train.QBtw == Q)]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         if len(tempdata) > 0:
             tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
@@ -376,6 +420,7 @@ def IMC(x):
     return fulldata
 
 country = 'us'
+q_align = True
 if country == 'us':
     use_gdp = False
     period = 'Q'
@@ -395,13 +440,14 @@ elif country == 'kr':
     ts_length = -1
     sector_len = 3
 
+if os.path.exists(f'./cache/cache.parquet'):
+    train = pd.read_parquet(f'./cache/cache.parquet', engine='pyarrow')
 
 if __name__ == '__main__':
 
-    print('build train data')
-    # if os.path.exists(f'./cache/cache.parquet'):
-    #    # remove cache
-    #    os.remove(f'./cache/cache.parquet')
+    # build and load train data
+    if os.path.exists(f'./cache/cache.parquet'):
+        os.remove(f'./cache/cache.parquet')
 
     train = build_data(f'data/{country}/consenlist/*.csv'
                        , period=period
@@ -415,38 +461,41 @@ if __name__ == '__main__':
                        , country=country
                        , use_cache=True)
 
+    train.to_parquet(f'./cache/cache.parquet', engine='pyarrow')
+
     if country == 'us':
         new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
         # if previous year's error is less than 0.5%, remove the stock from the list
         new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
         # retain only guidance given stock
-        if period == 'Y':
+        if period == 'Y':# or period == 'Q':
             new_train = new_train[new_train.Guidance == 1]
-        UniqueSymbol = new_train.UniqueSymbol.unique()
     else:
         new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
         # if previous year's error is less than 0.5%, remove the stock from the list
         new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
-        UniqueSymbol = new_train.UniqueSymbol.unique()
+
+    UniqueSymbol = new_train.UniqueSymbol.unique()
 
     # (1) simple average
     dataset = []
+    multi_arg = list(product(UniqueSymbol, [q_align]))
 
-    dataset = process_map(EW_cache, UniqueSymbol, max_workers=os.cpu_count()-1)
+    dataset = process_map(EW, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/EW.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/EW_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/EW_a.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/EW_a_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (2) smart consensus
+    # (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [star_count]))
+    multi_arg = list(product(UniqueSymbol, [star_count], [q_align]))
 
     dataset = process_map(PBest, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -454,14 +503,14 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/PBest.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/PBest_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/PBest_a.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/PBest_a_MSFE.csv', encoding='utf-8-sig')
 
 
     # (3) Inverse MSE (IMSE)
     min_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [q_align]))
 
     dataset = process_map(IMSE, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -469,14 +518,14 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/IMSE.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMSE_MSFE.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv(f'./result/{country}/IMSE_a.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMSE_a_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (5) Bias-Adjusted Mean Adjusted (BAM_adj)
+    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [q_align]))
 
     dataset = process_map(BAM_adj, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -484,14 +533,14 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/BAM_adj.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/BAM_adj_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/BAM_adj_a.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/BAM_adj_a_MSFE.csv', encoding='utf-8-sig')
 
 
     # (6) Iterated Mean Combination (IMC)
     min_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [q_align]))
 
     dataset = process_map(IMC, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -499,8 +548,8 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd. Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/IMC.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMC_MSFE.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv(f'./result/{country}/IMC_a.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMC_a_MSFE.csv', encoding='utf-8-sig')
 
     '''#draw 3d surface plot with dataset_pd
     byFY = dataset_pd.groupby(['FY', 'QBtw'])['MSFE'].mean()

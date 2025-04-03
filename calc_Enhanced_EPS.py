@@ -38,6 +38,7 @@ def groupby_sector(df, df_sector, col_name, prddate, extend, filename):
     if extend:
         df_prevyear = pd.read_csv(filename, encoding='utf-8-sig', index_col=0)
         df_prevyear = df_prevyear[df_prevyear.EQBtw == df_prevyear.EQBtw.min()]
+        df_prevyear = df_prevyear[~df_prevyear.index.duplicated(keep='first')]
         df['EPS_1YE'] = df_prevyear['EPS_Est']
         df['EPS_1YEW'] = df_prevyear['EPS_EW']
         df['EPS_1Y'] = df.apply(lambda x: x['EPS_1YE'] if pd.isna(x['EPS_1Y']) else x['EPS_1Y'], axis=1)
@@ -109,13 +110,13 @@ def groupby_sector(df, df_sector, col_name, prddate, extend, filename):
 if __name__ == '__main__':
 
     country = 'us'
-    prddate = '2025-01-27'  # '2024-07-18' '2024-08-19'
+    period = 'Q'
+    prddate = '2025-04-03'  # '2024-07-18' '2024-08-19'
 
-    prdYears = [2025]#,2025]
-    extend = [False]#,True]
+    prdFY = [2024, 2025]
+    extend = [False, True]
 
     if country == 'us':
-        period = 'Q'
         use_gdp = False
         gdp_path = None
         use_custom_gdp = False
@@ -128,10 +129,9 @@ if __name__ == '__main__':
         model_list = ['IMSE_adp']
         sector_groupby_len = 6
     elif country == 'kr':
-        period = 'Y'
         use_gdp = True
         gdp_path = f'data/{country}/QGDP.xlsx'
-        use_custom_gdp = True
+        use_custom_gdp = False
         gdp_header = 13
         gdp_lag = 2
         rolling = 4
@@ -139,26 +139,12 @@ if __name__ == '__main__':
         ts_length = 10
         sector_len = 3
         model_list = ['IMC_adp']
-        sector_groupby_len = 5
-    elif country == 'kr2':
-        period = 'Y'
-        use_gdp = True
-        gdp_path = f'data/{country}/FX.xlsx'
-        use_custom_gdp = False
-        gdp_header = 13
-        gdp_lag = 0
-        rolling = 1
-        use_prd = True
-        ts_length = 10
-        sector_len = 3
-        model_list = ['IMC_adp']
-        sector_groupby_len = 5
-
+        sector_groupby_len = 7
 
     print('build train data')
-    if os.path.exists(f'./cache/cache.csv'):
+    if os.path.exists(f'./cache/cache.parquet'):
         # remove cache
-        os.remove(f'./cache/cache.csv')
+        os.remove(f'./cache/cache.parquet')
 
     train = build_data(f'data/{country}/consenlist/*.csv'
                        , period=period
@@ -176,12 +162,15 @@ if __name__ == '__main__':
     shares = shares.loc[pd.to_numeric(shares.iloc[:,-1], errors='coerce').dropna().index]
 
     if country == 'us':
-        new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
         # if previous year's error is less than 0.5%, remove the stock from the list
-        new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
         # retain only guidance given stock
-        new_train = new_train[new_train.Guidance == 1]
-        UniqueSymbol_total = new_train.UniqueSymbol.unique()
+        if period == 'Y':# or period == 'Q':
+            new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
+            new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
+            new_train = new_train[new_train.Guidance == 1]
+            UniqueSymbol_total = new_train.UniqueSymbol.unique()
+        else:
+            UniqueSymbol_total = train.UniqueSymbol.unique()
     else:
         new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
         # if previous year's error is less than 0.5%, remove the stock from the list
@@ -191,17 +180,17 @@ if __name__ == '__main__':
     # make some changes(sector classification, prediction date) to the train data
     train = train[train.Date <= prddate]
 
-    print('save train data to db')
-    save_db(train)
+    #print('save train data to db')
+    #save_db(train)
 
     model = Enhanced_EPS()
     model.calc_ucurve(country, prdYears, train)
 
     # concat prdYears with extend[False, True]
-    prdYears_list = [[prdYears[i], extend[i]] for i in range(len(prdYears))]
+    prdFY_list = [[prdFY[i], extend[i]] for i in range(len(prdFY))]
 
     # step1: save IMC and EW Enhanced EPS to csv
-    for prdyear, extend in prdYears_list:
+    for prdyear, extend in prdFY_list:
         UniqueSymbol = train[(train.UniqueSymbol.isin(UniqueSymbol_total)) & (train.Year==str(prdyear))].UniqueSymbol.unique()
         UniqueSymbol_sub = train[(~train.UniqueSymbol.isin(UniqueSymbol_total)) & (train.Year == str(prdyear))].UniqueSymbol.unique()
 
@@ -281,7 +270,7 @@ if __name__ == '__main__':
             result_sector.to_csv(f'./result/{country}/{model_name}_QBtw_{prdyear}_{prddate}.csv', encoding='utf-8-sig')
 
     print('Step1 Finished')
-    quit()
+
     # step2: save total term spread by gdp and time delta to csv
     total_ts_pd = build_gdp_scenario(model
                                      , gdp_data_path=gdp_path
@@ -293,7 +282,7 @@ if __name__ == '__main__':
     total_ts_pd.to_csv(f'./result/{country}/total_ts.csv', encoding='utf-8-sig')
 
     if use_gdp:
-        for prdyear in prdYears:
+        for prdyear in prdFY:
             ts = merged_ts(total_ts_pd, prdyear, prddate)
             ts.to_csv(f'./result/{country}/ts_{prdyear}.csv', encoding='utf-8-sig')
 
@@ -311,7 +300,7 @@ if __name__ == '__main__':
             total_ts_pd.to_csv(f'./result/{country}/total_ts_{cg.replace(" ","")}.csv', encoding='utf-8-sig')
 
             if use_gdp:
-                for prdyear in prdYears:
+                for prdyear in prdFY:
                     ts = merged_ts(total_ts_pd, prdyear, prddate)
                     ts.to_csv(f'./result/{country}/ts_{prdyear}_{cg.replace(" ","")}.csv', encoding='utf-8-sig')
 

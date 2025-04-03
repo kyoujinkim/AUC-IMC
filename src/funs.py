@@ -41,7 +41,7 @@ def save_db(db):
 def load_duckdb(code):
     query = f"""SELECT * 
         FROM read_parquet('./cache/cache.parquet')
-        WHERE uniquesymbol='{code}'"""
+        WHERE Code='{code}'"""
 
     data = duckdb.sql(query).to_df()
 
@@ -186,15 +186,15 @@ def EW(x, train):
 
 def get_quarter(x, lag:int=1):
     if x.month <= 3 + lag and x.month > 0 + lag:
-        return f'1Q{x.year}'
+        return f'1Q{str(x.year)[-2:]}AS'
     elif x.month <= 6 + lag:
-        return f'2Q{x.year}'
+        return f'2Q{str(x.year)[-2:]}AS'
     elif x.month <= 9 + lag:
-        return f'3Q{x.year}'
+        return f'3Q{str(x.year)[-2:]}AS'
     elif x.month <= 12 + lag:
-        return f'4Q{x.year}'
+        return f'4Q{str(x.year)[-2:]}AS'
     else:
-        return f'4Q{x.year-1}'
+        return f'4Q{str(x.year-1)[-2:]}AS'
 
 
 def build_data(path: str = './data/consenlist/*.csv'
@@ -226,6 +226,8 @@ def build_data(path: str = './data/consenlist/*.csv'
     if use_cache:
         if os.path.exists('./cache/cache.parquet'):
             return pd.read_parquet('./cache/cache.parquet', engine="pyarrow")
+
+    print('Building dataset...')
 
     consenlist = glob(path)
     if period == 'Y':
@@ -262,12 +264,15 @@ def build_data(path: str = './data/consenlist/*.csv'
 
     if period == 'Q':
         df['FY'] = pd.to_datetime(df.PeriodEndDate).apply(lambda x: get_quarter(x, lag=1))
+        df['Year']= '20' + df['FY'].str[-4:-2]
+        df['Q'] =  df['FY'].str[:2]
     else:
         df['FY'] = df.Year.astype(str) + 'AS'
+        df['Q'] = '4Q'
 
     df['Security'] = df.Security.replace(r'\([^)]*\)','', regex=True)
     df['FilingDeadline'] = df.PeriodEndDate - MonthEnd(9)
-    df['A_EPS_1'] = np.where(df['Date'] < df['FilingDeadline'], df['EPS_1Y'], df['EPS_2Y'])
+    df['A_EPS_1'] = np.where(df['Date'] < df['FilingDeadline'], df['EPS_2Y'], df['EPS_1Y'])
 
     df = df.dropna(subset=['BPS', 'E_EPS'])
     df = df.drop_duplicates()
@@ -409,7 +414,7 @@ def IMC_adp_cache(x):
 
     symbol = x[0]
     code = symbol[:-6]
-    train = load_db(code)
+    train = load_duckdb(code)
 
     min_count = x[1]
     year_range = x[2]
@@ -549,7 +554,7 @@ def IMSE_adp_cache(x):
 
     symbol = x[0]
     code = symbol[:-6]
-    train = load_db(code)
+    train = load_duckdb(code)
 
     min_count = x[1]
     year_range = x[2]
@@ -661,7 +666,7 @@ def EW_adp_cache(x):
 
     symbol = x[0]
     code = symbol[:-6]
-    train = load_db(code)
+    train = load_duckdb(code)
 
     min_count = x[1]
     year_range = x[2]
@@ -701,9 +706,34 @@ def EW_adp_cache(x):
 
 def EW_cache(x):
 
+    symbol = x[0]
+    code = symbol[:-6]
+    train = load_duckdb(code)
+
+    df = train[train.UniqueSymbol == symbol]
+    df['E_ROE_o'] = df['E_ROE'].copy()
+
+    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+
+    estEW = df.groupby('QBtw')['E_ROE'].mean()
+
+    # estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
+    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+
+    eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+
+    data = pd.concat([estEW, estEW, estEW_prev, eqbtw], axis=1)
+    data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
+
+    data = result_formatter(data, code, df, 0, 0)
+
+    return data
+
+def EW_duckdb(x):
+
     symbol = x
     code = symbol[:-6]
-    train = load_db(code)
+    train = load_duckdb(code)
 
     df = train[train.UniqueSymbol == symbol]
     df['E_ROE_o'] = df['E_ROE'].copy()

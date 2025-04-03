@@ -96,10 +96,16 @@ def filter_outlier(df, codecol, errorcol):
     return df[df[codecol].isin(df_list)]
 
 #@memoize
-def term_spread_adj(sector, year):
+def term_spread_adj(x):
+
+    #sector, year, quarter, q_align:bool=False
+    sector = x[0]
+    year = x[1]
+    quarter = x[2]
+    q_align = x[3]
 
     currYear = int(year)
-    sector = sector
+    currQtr = quarter
     # if sector is na
     if pd.isna(sector):
         prev_data_bf = train[(train.Year <= str(currYear - 2))  & (train.Year >= str(currYear - 11))]
@@ -107,6 +113,9 @@ def term_spread_adj(sector, year):
     else:
         prev_data_bf = train[(train.SectorClass == sector) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
         prev_data_af = train[(train.SectorClass == sector) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
+    if q_align:
+        prev_data_bf = prev_data_bf[train.Q == currQtr]
+        prev_data_af = prev_data_af[train.Q == currQtr]
 
     num_of_obs = 5
 
@@ -148,16 +157,25 @@ def term_spread_adj(sector, year):
         except:
             popt_af = np.array([np.nan] * num_of_obs)
 
-    return {'popt_bf':popt_bf, 'popt_af':popt_af}
+    return {x[:3]: {'popt_bf':popt_bf, 'popt_af':popt_af}}
 
 
 def EW_adp(x):
 
-    symbol = x
+    symbol = x[0]
+    q_align = x[1]
+
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
-    popt = term_spread_adj(sector, year)
+    if 'Q' in year:
+        quarter = year[:2]
+        year = '20' + year[-2:]
+    else:
+        quarter = 'NA'
+    if q_align == False:
+        quarter = 'NA'
+    popt = cache_ltable[sector, year, quarter]
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
@@ -183,11 +201,19 @@ def PBest_adp(x):
 
     symbol = x[0]
     star_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
-    popt = term_spread_adj(sector, year)
+    if 'Q' in year:
+        quarter = year[:2]
+        year = '20' + year[-2:]
+    else:
+        quarter = 'NA'
+    if q_align == False:
+        quarter = 'NA'
+    popt = cache_ltable[sector, year, quarter]
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
@@ -211,6 +237,8 @@ def PBest_adp(x):
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         if Q < 4:
             if popt_af[0] == 0:
@@ -259,11 +287,19 @@ def IMSE_adp(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
-    popt = term_spread_adj(sector, year)
+    if 'Q' in year:
+        quarter = year[:2]
+        year = '20' + year[-2:]
+    else:
+        quarter = 'NA'
+    if q_align == False:
+        quarter = 'NA'
+    popt = cache_ltable[sector, year, quarter]
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
@@ -287,6 +323,8 @@ def IMSE_adp(x):
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         if Q < 4:
             if popt_af[0] == 0:
@@ -350,11 +388,19 @@ def BAM_adp(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
-    popt = term_spread_adj(sector, year)
+    if 'Q' in year:
+        quarter = year[:2]
+        year = '20' + year[-2:]
+    else:
+        quarter = 'NA'
+    if q_align == False:
+        quarter = 'NA'
+    popt = cache_ltable[sector, year, quarter]
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
@@ -378,6 +424,8 @@ def BAM_adp(x):
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
                              & (train.Year >= str(int(df.Year.iloc[0]) - 11))]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         if Q < 4:
             if popt_af[0] == 0:
@@ -425,11 +473,19 @@ def BAM_adj_adp(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
     sector = df.SectorClass.iloc[-1]
-    popt = term_spread_adj(sector, year)
+    if 'Q' in year:
+        quarter = year[:2]
+        year = '20' + year[-2:]
+    else:
+        quarter = 'NA'
+    if q_align == False:
+        quarter = 'NA'
+    popt = cache_ltable[sector, year, quarter]
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
@@ -440,21 +496,24 @@ def BAM_adj_adp(x):
                               else term_spread(x, *popt_af)
                               , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+
     Q_result = []
 
     for Q in df.QBtw.unique():
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]-1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         if Q < 4:
             if pd.isna(popt_af[0]):
@@ -501,12 +560,19 @@ def IMC_adp(x):
 
     symbol = x[0]
     min_count = x[1]
+    q_align = x[2]
 
     df = train[train.UniqueSymbol == symbol]
     year = symbol[-6:-2]
-
     sector = df.SectorClass.iloc[-1]
-    popt = term_spread_adj(sector, year)
+    if 'Q' in year:
+        quarter = year[:2]
+        year = '20' + year[-2:]
+    else:
+        quarter = 'NA'
+    if q_align == False:
+        quarter = 'NA'
+    popt = cache_ltable[sector, year, quarter]
     popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
     popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
@@ -517,8 +583,10 @@ def IMC_adp(x):
                               else term_spread(x, *popt_af)
                               , axis=1).fillna(0))
     df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+
     df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
     df['SecAnl'] = df['Security'] + df['CoreAnalyst']
+
     Q_result = []
     S_result = []
 
@@ -526,15 +594,17 @@ def IMC_adp(x):
         if Q < 4:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
         else:
             tempdata = train[(train.Code == df.Code.iloc[0])
                              & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - x[2]-1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
                             ]
             tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        if q_align:
+            tempdata = tempdata[tempdata.Q == quarter]
 
         if Q < 4:
             if pd.isna(popt_af[0]):
@@ -613,16 +683,19 @@ def IMC_adp(x):
 
 
 country = 'us'
+q_align = False
 if country == 'us':
     use_gdp = False
-    gdp_path = f'data/{country}/QGDP.xlsx'
-    gdp_header = 0
+    period = 'Q'
+    gdp_path = f'data/{country}/PR.xlsx'
+    gdp_header = 8
     gdp_lag = 0
-    rolling = 4
+    rolling = 1
     ts_length = -1
     sector_len = 2
 elif country == 'kr':
     use_gdp = True
+    period = 'Y'
     gdp_path = f'data/{country}/QGDP.xlsx'
     gdp_header = 13
     gdp_lag = 2
@@ -630,64 +703,78 @@ elif country == 'kr':
     ts_length = -1
     sector_len = 3
 
-train = build_data(f'data/{country}/consenlist/*.csv'
-                   , use_gdp=use_gdp
-                   , gdp_path=gdp_path
-                   , gdp_header=gdp_header
-                   , gdp_lag=gdp_lag
-                   , rolling=rolling
-                   , ts_length=ts_length
-                   , sector_len=sector_len
-                   , country=country
-                   , use_cache=True)
-
-train = train.dropna(subset=['E_ROE', 'A_ROE'])
-
-if country == 'us':
-    train = train[train.A_EPS_1.abs() / train.BPS < 1]
-    # if previous year's error is less than 0.5%, remove the stock from the list
-    new_train = filter_guided_stock(train, 'Code', 'Error', 0.001)
-    # retain only guidance given stock
-    #train = train[train.Guidance == 1]
-    #UniqueSymbol = new_train.UniqueSymbol.unique()
-    UniqueSymbol = new_train.UniqueSymbol.unique()
-    #UniqueSymbol = train[~train.UniqueSymbol.isin(UniqueSymbol_total)].UniqueSymbol.unique()
-else:
-    UniqueSymbol = train.UniqueSymbol.unique()
-
-cache_ltable = dict()
-# we have no choice but have to update cache_lookup table explicitly
-if os.path.exists(f'result/{country}/cache_ltable.json'):
-    with open(f'result/{country}/cache_ltable.json') as f:
-        cache_ltable = json.load(f)
-    cache_ltable = {eval(k): v for k, v in cache_ltable.items()}
-
-else:
-    listoftable = list(product(train.SectorClass.unique(), train.Year.unique()))
-    for table in tqdm(listoftable):
-        cache_ltable[table] = term_spread_adj(*table)
-
-    pd.DataFrame(cache_ltable).to_json(f'result/{country}/cache_ltable.json')
+if os.path.exists(f'./cache/cache.parquet'):
+    train = pd.read_parquet(f'./cache/cache.parquet', engine='pyarrow')
+if os.path.exists(f'result/{country}/cache_ltable.parquet'):
+    cache_ltable = pd.read_parquet(f'result/{country}/cache_ltable.parquet', engine='pyarrow')
+    cache_ltable = cache_ltable.to_dict(orient='index')
 
 if __name__ == '__main__':
+
+    # build and load train data
+    if os.path.exists(f'./cache/cache.parquet'):
+        os.remove(f'./cache/cache.parquet')
+
+    train = build_data(f'data/{country}/consenlist/*.csv'
+                       , period=period
+                       , use_gdp=use_gdp
+                       , gdp_path=gdp_path
+                       , gdp_header=gdp_header
+                       , gdp_lag=gdp_lag
+                       , rolling=rolling
+                       , ts_length=ts_length
+                       , sector_len=sector_len
+                       , country=country
+                       , use_cache=True)
+
+    train.to_parquet(f'./cache/cache.parquet', engine='pyarrow')
+
+    if country == 'us':
+        new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
+        # if previous year's error is less than 0.5%, remove the stock from the list
+        new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
+        # retain only guidance given stock
+        if period == 'Y' or period == 'Q':
+            new_train = new_train[new_train.Guidance == 1]
+    else:
+        new_train = train[train.A_EPS_1.abs() / train.BPS < 3]
+        # if previous year's error is less than 0.5%, remove the stock from the list
+        new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
+
+    UniqueSymbol = new_train.UniqueSymbol.unique()
+
+    # build and load Adaptive Uncertainty Curve
+    if os.path.exists(f'result/{country}/cache_ltable.json'):
+        # remove ltable cache
+        os.remove(f'result/{country}/cache_ltable.json')
+
+    if q_align:
+        listoftable = list(product(train.SectorClass.unique(), train.Year.unique(), train.Q.unique(), [q_align]))
+    else:
+        listoftable = list(product(train.SectorClass.unique(), train.Year.unique(), ['NA'], [q_align]))
+    cache_ltable = process_map(term_spread_adj, listoftable, max_workers=os.cpu_count() - 1)
+    cache_ltable = {k: v for d in cache_ltable for k, v in d.items()}
+    pd.DataFrame.from_dict(cache_ltable, orient='index').to_parquet(f'result/{country}/cache_ltable.parquet', engine='pyarrow')
+
     # (1) simple average
     dataset = []
+    multi_arg = list(product(UniqueSymbol, [q_align]))
 
-    dataset = process_map(EW_adp, UniqueSymbol, max_workers=os.cpu_count()-1)
+    dataset = process_map(EW_adp, multi_arg, max_workers=os.cpu_count()-1)
 
     dataset_pd = pd.concat(dataset)
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/EW_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/EW_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/EW_adp_ag.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/EW_adp_ag_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (2) smart consensus
+    # (2) smart consensus
     # measure analyst's error rate by year
     star_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [star_count]))
+    multi_arg = list(product(UniqueSymbol, [star_count], [q_align]))
 
     dataset = process_map(PBest_adp, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -695,14 +782,14 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/PBest_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/PBest_adp_MSFE.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv(f'./result/{country}/PBest_adp_ag.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/PBest_adp_ag_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (3) Inverse MSE (IMSE)
+    # (3) Inverse MSE (IMSE)
     min_count = 5
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [q_align]))
 
     dataset = process_map(IMSE_adp, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -710,15 +797,14 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/IMSE_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMSE_adp_MSFE.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv(f'./result/{country}/IMSE_adp_ag.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMSE_adp_ag_MSFE.csv', encoding='utf-8-sig')
 
 
-    '''# (5) Bias-Adjusted Mean Adjusted (BAM_adj)
+    # (5) Bias-Adjusted Mean Adjusted (BAM_adj)
     min_count = 5
-    year_range = 10
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [q_align]))
 
     dataset = process_map(BAM_adj_adp, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -726,15 +812,14 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/BAM_adj_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/BAM_adj_adp_MSFE.csv', encoding='utf-8-sig')
+    dataset_pd.to_csv(f'./result/{country}/BAM_adj_adp_ag.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/BAM_adj_adp_ag_MSFE.csv', encoding='utf-8-sig')
 
 
     # (6) Iterated Mean Combination (IMC)
     min_count = 5
-    year_range = 10
     dataset = []
-    multi_arg = list(product(UniqueSymbol, [min_count], [year_range]))
+    multi_arg = list(product(UniqueSymbol, [min_count], [q_align]))
 
     dataset = process_map(IMC_adp, multi_arg, max_workers=os.cpu_count()-1)
 
@@ -742,5 +827,5 @@ if __name__ == '__main__':
     dataset_pd['MAFE'] = dataset_pd.Error.abs()
     MSFE_result = dataset_pd.groupby(['QBtw'])[['MAFE', 'Std']].mean()
     print(MSFE_result)
-    dataset_pd.to_csv(f'./result/{country}/IMC_adp.csv', encoding='utf-8-sig')
-    MSFE_result.to_csv(f'./result/{country}/IMC_adp_MSFE.csv', encoding='utf-8-sig')'''
+    dataset_pd.to_csv(f'./result/{country}/IMC_adp_ag.csv', encoding='utf-8-sig')
+    MSFE_result.to_csv(f'./result/{country}/IMC_adp_ag_MSFE.csv', encoding='utf-8-sig')

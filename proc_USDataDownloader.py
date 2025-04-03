@@ -23,13 +23,13 @@ class DataDownloader:
 
     def read_list(self, path:str):
         '''
-        Read list of US stocks which listed at proc1_us_list_setup.py
+        Read list of US stocks which listed at proc_USListSetup.py
         :param path:
         :return:
         '''
         pd_const = pd.read_csv(path)
 
-        pd_const['fy'] = pd_const.Date.apply(lambda x: dt.strptime(x,'%Y-%m-%d').year)
+        pd_const['fy'] = pd_const.Date.apply(lambda x: dt.strptime(x,'%Y-%m-%d').year).astype(int)
         self.const = pd_const
         self.fy = pd_const['fy'].unique()
         self.fq = list([f'{q}FQ{fy}' for fy in self.fy for q in range(1, 5)])
@@ -45,7 +45,7 @@ class DataDownloader:
             self.q_window = 4
             # 8*
             down_list = []
-            for fy in self.fy:
+            for fy in range(startyear, endyear + 1):
                 if fy < startyear or fy > endyear:
                     continue
                 if fy == startyear:
@@ -61,7 +61,7 @@ class DataDownloader:
             self.methodology = ''
         else:
             self.q_window = 7
-            down_list = [f'{fy}' for fy in self.fy if fy >= startyear and fy <= endyear]
+            down_list = [f'{fy}' for fy in range(startyear, endyear + 1)]
             self.methodology = 'InterimSum'
 
         self.down_list = down_list
@@ -91,13 +91,17 @@ class DataDownloader:
                 if self.period == 'Q':
                     fy = int(fdate[-4:])
                     fdate_m1 = self.prev_period(fdate)
-                    fdate_m2 = self.prev_period(fdate)
+                    fdate_m2 = self.prev_period(self.prev_period(fdate))
                 else:
                     fy = fdate
                     fdate_m1 = self.prev_period(fdate)
                     fdate_m2 = self.prev_period(self.prev_period(fdate))
 
-                codes = self.const[self.const['fy'] == fy].Code.to_list()
+                if fy > self.const['fy'].max():
+                    fy_for_code = self.const.fy.max()
+                else:
+                    fy_for_code = fy
+                codes = self.const[self.const['fy'] == fy_for_code].Code.to_list()
 
                 df_date = rd.get_data(
                     universe=codes,
@@ -221,6 +225,7 @@ if __name__ == '__main__':
     dl = DataDownloader()
     dl.open_session(app_key)
     dl.read_list('./data/us/list_total.csv')
-    dl.set_period('Q', 2003, 2025, startquarter=1, endquarter=4)
+    dl.set_period('Q', 2024, 2026, startquarter=1, endquarter=4)
+    #dl.set_period('Y', 2024, 2026, startquarter=None, endquarter=None)
 
-    dl.run()
+    dl.run(skip_existing=False)

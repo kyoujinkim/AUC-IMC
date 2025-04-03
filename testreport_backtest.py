@@ -63,30 +63,30 @@ def calc_shock(model):
     diff['GEWEst'] = diff.EWEst - diff.Act_Prev
     diff = diff.reset_index()
 
-    diff['QGEst'] = diff.groupby(['FY', 'QBtw']).GEst.transform(lambda x: pd.qcut(x, 8, labels=[str(x) for x in range(10, 81, 10)]))
-    diff['QGEWEst'] = diff.groupby(['FY', 'QBtw']).GEWEst.transform(lambda x: pd.qcut(x, 8, labels=[str(x) for x in range(10, 81, 10)]))
-    diff['Shock'] = diff.groupby(['FY', 'QBtw']).Error.transform(lambda x: pd.qcut(x, 8, labels=[str(x) for x in range(10, 81, 10)]))
+    diff['QGEst'] = diff.groupby(['FY', 'EQBtw']).GEst.transform(lambda x: pd.qcut(x, 8, labels=[str(x) for x in range(10, 81, 10)]))
+    diff['QGEWEst'] = diff.groupby(['FY', 'EQBtw']).GEWEst.transform(lambda x: pd.qcut(x, 8, labels=[str(x) for x in range(10, 81, 10)]))
+    diff['Shock'] = diff.groupby(['FY', 'EQBtw']).Error.transform(lambda x: pd.qcut(x, 8, labels=[str(x) for x in range(10, 81, 10)]))
 
-    result = diff.groupby(['QBtw', 'QGEst'])[
+    result = diff.groupby(['EQBtw', 'QGEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Est']].mean().dropna(how='all')
-    result_ew = diff.groupby(['QBtw', 'QGEWEst'])[
+    result_ew = diff.groupby(['EQBtw', 'QGEWEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'EWEst']].mean().dropna(how='all')
-    result_sk = diff.groupby(['QBtw', 'Shock'])[
+    result_sk = diff.groupby(['EQBtw', 'Shock'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Error']].mean().dropna(how='all')
-    result_std = diff.groupby(['QBtw', 'QGEst'])[
+    result_std = diff.groupby(['EQBtw', 'QGEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Est']].std().dropna(how='all')
-    result_ew_std = diff.groupby(['QBtw', 'QGEWEst'])[
+    result_ew_std = diff.groupby(['EQBtw', 'QGEWEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'EWEst']].std().dropna(how='all')
-    result_sk_std = diff.groupby(['QBtw', 'Shock'])[
+    result_sk_std = diff.groupby(['EQBtw', 'Shock'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Error']].std().dropna(how='all')
-    result_count = diff.groupby(['FY', 'QBtw', 'QGEst'])[
+    result_count = diff.groupby(['FY', 'EQBtw', 'QGEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Est']].count().dropna(how='all')
 
-    result_ts = diff.groupby(['FY', 'QBtw', 'QGEst'])[
+    result_ts = diff.groupby(['FY', 'EQBtw', 'QGEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Est']].mean().dropna(how='all')
-    result_ew_ts = diff.groupby(['FY', 'QBtw', 'QGEWEst'])[
+    result_ew_ts = diff.groupby(['FY', 'EQBtw', 'QGEWEst'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'EWEst']].mean().dropna(how='all')
-    result_sk_ts = diff.groupby(['FY', 'QBtw', 'Shock'])[
+    result_sk_ts = diff.groupby(['FY', 'EQBtw', 'Shock'])[
         [str(x)+'M_Rtn' for x in range(3,28,3)] + ['Model_Error', 'BM_Error', 'Error']].mean().dropna(how='all')
 
     for idx in range(9, 0, -1):
