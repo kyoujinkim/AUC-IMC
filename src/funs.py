@@ -119,7 +119,10 @@ def apply_imc(x, tempset):
 def term_spread_adj(sector, year, train):
 
     train = train.dropna(subset=['Error'])
-    currYear = int(year)
+    if 'Q' in year:
+        currYear = int('20'+year[2:4])
+    else:
+        currYear = int(year[:4])
     sector = sector
     # if sector is na
     if pd.isna(sector):
@@ -187,15 +190,23 @@ def EW(x, train):
 def get_quarter(x, lag:int=1):
     if x.month <= 3 + lag and x.month > 0 + lag:
         return f'1Q{str(x.year)[-2:]}AS'
-    elif x.month <= 6 + lag:
+    elif x.month > 3 + lag and x.month <= 6 + lag:
         return f'2Q{str(x.year)[-2:]}AS'
-    elif x.month <= 9 + lag:
+    elif x.month > 6 + lag and x.month <= 9 + lag:
         return f'3Q{str(x.year)[-2:]}AS'
-    elif x.month <= 12 + lag:
+    elif x.month > 9 + lag and x.month <= 12 + lag:
         return f'4Q{str(x.year)[-2:]}AS'
     else:
         return f'4Q{str(x.year-1)[-2:]}AS'
 
+def shift_period(period, lag=1):
+    if 'Q' in period:
+        fy = int(period[-4:-2])
+        q = period[:2]
+        return f'{q}{fy - lag}AS'
+    else:
+        fy = int(period[:4])
+        return f'{fy - lag}AS'
 
 def build_data(path: str = './data/consenlist/*.csv'
                , period: str = 'Y'
@@ -253,6 +264,8 @@ def build_data(path: str = './data/consenlist/*.csv'
             , 'EPS': 'A_EPS'
             , 'GICS': 'Sector'})
         df = df.dropna(subset='Year')
+        # in PeriodEndDate, some data has 'YYYY-MM-DD' format, and some has 'YYYY-MM-DD HH:MM:SS' format.
+        df['PeriodEndDate'] = df['PeriodEndDate'].str.split(' ').str[0]
         df.PeriodEndDate = pd.to_datetime(df.PeriodEndDate)
         # if PeriodEndDate is less than july, use next year. Else, use current year
         df['Year'] = np.where(df['PeriodEndDate'].dt.month < 7, df['Year'].astype(int) - 1, df['Year'])
@@ -260,7 +273,7 @@ def build_data(path: str = './data/consenlist/*.csv'
     else:
         df['PeriodEndDate'] = pd.to_datetime(df.Year.astype(int).astype(str) + '-12-31')
 
-    df.Date = pd.to_datetime(df.Date)
+    df.Date = pd.to_datetime(df.Date.str.split(' ').str[0])
 
     if period == 'Q':
         df['FY'] = pd.to_datetime(df.PeriodEndDate).apply(lambda x: get_quarter(x, lag=1))
@@ -276,13 +289,34 @@ def build_data(path: str = './data/consenlist/*.csv'
 
     df = df.dropna(subset=['BPS', 'E_EPS'])
     df = df.drop_duplicates()
-    df.Sector = df.Sector.astype(int, errors='ignore').astype(str, errors='ignore')
+    df.Sector = df.Sector.astype(int, errors='ignore')
+
+    unique_sector_map = df.dropna(subset='Sector').groupby('Code')[['Sector']].last()
+    # if sector is na, fill with unique_sector_map
+    df['Sector'] = df['Sector'].fillna(df['Code'].map(unique_sector_map['Sector'])).astype(str)
     df['SectorClass'] = df.Sector.str[:sector_len]
     date_max = df.Date.max()
 
-    df.BPS = df.BPS.astype(float)
-    # droprow if BPS is less than 0
+    # fill missed BPS data with previous fiscal year's BPS
+    df['prev_FY'] = df['FY'].apply(lambda x: shift_period(x, lag=1))
+    unique_bps_map = df.dropna(subset='BPS').groupby(['Code', 'FY'])['BPS'].last()
+    unique_bps_map.index = unique_bps_map.index.set_names(['Code', 'prev_FY'])
+    unique_bps_map = unique_bps_map.rename('BPS_fill')
+
+    df_idx = pd.MultiIndex.from_arrays([df['Code'], df['prev_FY']])
+    bps_values = unique_bps_map.reindex(df_idx).values
+
+    df['BPS'] = df['BPS'].where(~df['BPS'].isna(), bps_values).astype(float)
+
+    # drop BPS if it is less than 0
     df = df[df.BPS > 0]
+    # Since previously downloaded data do not contain A_EPS data, fill missed A_EPS data with newly updated A_EPS
+    df_eps = df[['Code', 'FY', 'A_EPS']].dropna(subset=['A_EPS']).groupby(['Code', 'FY'])['A_EPS'].last()
+    df_eps.index = df_eps.index.set_names(['Code', 'FY'])
+    df_idx = pd.MultiIndex.from_arrays([df['Code'], df['FY']])
+    eps_values = df_eps.reindex(df_idx).values
+    df['A_EPS'] = df['A_EPS'].where(~df['A_EPS'].isna(), eps_values).astype(float)
+
     df['UniqueSymbol'] = df['Code'] + df['FY']
     df['E_ROE'] = df['E_EPS'] / df.BPS
     df['A_ROE'] = df['A_EPS'] / df.BPS
@@ -297,7 +331,19 @@ def build_data(path: str = './data/consenlist/*.csv'
     df['QBtw'] = (df['totalDiff'] / 3).astype(int)
     df['QBtw'] = df['QBtw'].apply(lambda x: 7 if x > 7 else x)
 
-    df['equalEDate'] = pd.to_datetime((df.Year.astype(int) + 1).astype(str) + '-03-31')
+    if period=='Q':
+        df['equalEDate'] = np.where(df.Q=='1Q',
+            pd.to_datetime((df.Year.astype(int)).astype(str) + '-04-30'),
+            np.where(df.Q=='2Q',
+                     pd.to_datetime((df.Year.astype(int)).astype(str) + '-07-31'),
+                     np.where(df.Q=='3Q',
+                              pd.to_datetime((df.Year.astype(int)).astype(str) + '-10-31'),
+                              pd.to_datetime((df.Year.astype(int)+1).astype(str) + '-01-31')
+                              )
+                     )
+                                    )
+    else:
+        df['equalEDate'] = pd.to_datetime((df.Year.astype(int) + 1).astype(str) + '-03-31')
     df['YearDiff'] = df.equalEDate.dt.year - df.Date.dt.year
     df['MonthDiff'] = df.equalEDate.dt.month - df.Date.dt.month
     df['totalDiff'] = df['YearDiff'] * 12 + df['MonthDiff']
@@ -760,14 +806,15 @@ def term_spread_now(x, gdp, b0, c, b1, b2, lam):
     return b0 + c * gdp / 100 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
 
 
-def merged_ts(total_ts, year:int, prddate:str='2024-11-11'):
+def merged_ts(total_ts, fy:str, prddate:str='2024-11-11'):
     '''
     merge total term spread data by gdp senarios
     :param total_ts: ts per gdp senarios
     :param year: prediected eps year
     :return: merged ts
     '''
-    ts = total_ts.filter(regex=(f", {year}"))
+    year = int(fy[:4])
+    ts = total_ts.filter(regex=(f"{year}AS"))
     ts.index = [dt.datetime(year+1, 3, 31) - dt.timedelta(t) for t in ts.index]
 
     # split ()_date to ()

@@ -101,6 +101,83 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="\result\kr\return_analysis\rtnBAM_adj_adp_ts.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnEW_adp_1y_all.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnEW_adp_5y_all_ts.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnIMC.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnIMC_adp_10y_3c_5y.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnIMC_adp_10y_5c_10y_EW.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnIMC_adp_10y_5c_10y_Shock_TS.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnIMC_adp_Model.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnIMC_adp_ts.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\rtnPBest_adp.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="\result\kr\return_analysis\stdIMC_adp_10y_5c_10y_IMC.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
         <entry key="\result\result_pv_QE_base.csv">
           <value>
             <Attribute>
@@ -136,7 +213,7 @@
             </Attribute>
           </value>
         </entry>
-        <entry key="\tmp.csv">
+        <entry key="\result\us\mixed_model_Q_2025-04-18.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />

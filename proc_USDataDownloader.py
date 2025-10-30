@@ -144,7 +144,7 @@ class DataDownloader:
                     try:
                         df_cross1 = rd.get_data(
                             universe=codes,
-                            fields=['TR.GICSSubIndustryCode', 'TR.F.EPSBasicExclExordItemsNormIssue(InstrumentType=Primary)'],
+                            fields=['TR.GICSSubIndustryCode', 'TR.EPSActValue'],
                             parameters={
                                 'SDate': edate.strftime('%Y-%m-%d'),
                                 'Period': str(fdate)
@@ -157,7 +157,7 @@ class DataDownloader:
                     try:
                         df_cross2 = rd.get_data(
                             universe=codes,
-                            fields=['TR.F.EPSBasicExclExordItemsNormIssue(InstrumentType=Primary)'],
+                            fields=['TR.EPSActValue'],
                             parameters={
                                 'SDate': edate.strftime('%Y-%m-%d'),
                                 'Period': str(fdate_m1)
@@ -170,7 +170,7 @@ class DataDownloader:
                     try:
                         df_cross3 = rd.get_data(
                             universe=codes,
-                            fields=['TR.F.EPSBasicExclExordItemsNormIssue(InstrumentType=Primary)', 'TR.F.BVperShrIssue(InstrumentType=Primary)'],
+                            fields=['TR.EPSActValue', 'TR.F.BVperShrIssue(InstrumentType=Primary)'],
                             parameters={
                                 'SDate': edate.strftime('%Y-%m-%d'),
                                 'Period': str(fdate_m2)
@@ -212,6 +212,10 @@ class DataDownloader:
                 df_total = pd.concat(df_total, axis=0)
                 df_total = df_total.join(df_date, on='Instrument')
 
+                if os.path.exists(f'./data/us/consenlist/eps_{fdate}.csv'):
+                    # concat and drop duplicates
+                    prev_file = pd.read_csv(f'./data/us/consenlist/eps_{fdate}.csv', encoding='utf-8-sig', dtype={'Date': str, 'PeriodEndDate': str})
+                    df_total = pd.concat([prev_file, df_total], axis=0).drop_duplicates()
                 df_total.to_csv(f'./data/us/consenlist/eps_{fdate}.csv', index=False, encoding='utf-8-sig')
 
                 pbar.update(1)
@@ -225,7 +229,7 @@ if __name__ == '__main__':
     dl = DataDownloader()
     dl.open_session(app_key)
     dl.read_list('./data/us/list_total.csv')
-    dl.set_period('Q', 2024, 2026, startquarter=1, endquarter=4)
+    dl.set_period('Q', 2025, 2025, startquarter=1, endquarter=4)
     #dl.set_period('Y', 2024, 2026, startquarter=None, endquarter=None)
 
     dl.run(skip_existing=False)
