@@ -208,6 +208,14 @@ def shift_period(period, lag=1):
         fy = int(period[:4])
         return f'{fy - lag}AS'
 
+def safe_read_csv(file, **kwargs)->pd.DataFrame:
+    try: df = pd.read_csv(file, **kwargs)
+    except:
+        try: df = pd.read_csv(file, encoding='cp949', **kwargs)
+        except: df = pd.read_csv(file, encoding='utf-8-sig', **kwargs)
+
+    return df
+
 def build_data(path: str = './data/consenlist/*.csv'
                , period: str = 'Y'
                , use_gdp: bool = True
@@ -248,11 +256,12 @@ def build_data(path: str = './data/consenlist/*.csv'
     else:
         raise ValueError('period should be either Y or Q')
 
+    df_list = []
     for idx, file in enumerate(consenlist):
-        if idx == 0:
-            df = pd.read_csv(file)
-        else:
-            df = pd.concat([df, pd.read_csv(file)], ignore_index=True, axis=0)
+        tmp_df = safe_read_csv(file)
+        tmp_df['NomialFY'] = file.split('_')[-1].split('.')[0]
+        df_list.append(tmp_df)
+    df = pd.concat(df_list, ignore_index=True, axis=0)
 
     df = df.dropna(how='all')
     if country == 'us':
@@ -271,7 +280,10 @@ def build_data(path: str = './data/consenlist/*.csv'
         df['Year'] = np.where(df['PeriodEndDate'].dt.month < 7, df['Year'].astype(int) - 1, df['Year'])
         df.Year = df.Year.astype(int).astype(str)
     else:
-        df['PeriodEndDate'] = pd.to_datetime(df.Year.astype(int).astype(str) + '-12-31')
+        row_fq = df['NomialFY'].str[0]
+        row_fy = df['NomialFY'].str[-4:]
+        fq_to_month = np.where(row_fq=='1', '03-31', np.where(row_fq=='2', '06-30', np.where(row_fq=='3', '09-30', '12-31')))
+        df['PeriodEndDate'] = pd.to_datetime(row_fy + '-' + fq_to_month)
 
     df.Date = pd.to_datetime(df.Date.str.split(' ').str[0])
 
@@ -802,8 +814,12 @@ def EW_duckdb(x):
 
 
 def term_spread_now(x, gdp, b0, c, b1, b2, lam):
-    theta = x / 365 / lam
-    return b0 + c * gdp / 100 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
+    try:
+        theta = x / 365 / lam
+        return b0 + c * gdp / 100 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
+
+    except:
+        return np.full_like(x, np.nan)
 
 
 def merged_ts(total_ts, fy:str, prddate:str='2024-11-11'):

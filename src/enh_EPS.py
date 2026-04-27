@@ -2,6 +2,7 @@ import pickle
 from multiprocessing.shared_memory import SharedMemory
 from typing import List
 
+from dateutil.relativedelta import relativedelta
 from tqdm.contrib.concurrent import process_map
 import matplotlib
 matplotlib.use("TkAgg")
@@ -311,6 +312,39 @@ class Enhanced_EPS(object):
             return dataset
 
     @staticmethod
+    def __fill_missing_est__(df):
+        df_pivot = pd.pivot_table(df, values='E_EPS', columns=['Security'], index=['QBtw'], aggfunc='last').ffill()
+        df_ravel = df_pivot.melt(ignore_index=False).reset_index()
+        df_ravel = df_ravel[df_ravel.value.isna()]
+
+        if not df_ravel.empty:
+            # 3. 'r['QBtw']+1'에 해당하는 데이터를 한 번에 가져오기 위해 조인 키 생성
+            df_ravel['target_QBtw'] = df_ravel['QBtw'] + 1
+
+            # 4. 원본 df에서 필요한 컬럼만 추출하여 병합 (Security와 QBtw를 기준으로 매칭)
+            # iloc[-1]의 효과를 내기 위해 drop_duplicates로 마지막 값만 남긴 df_target 사용
+            df_target = df.drop_duplicates(subset=['Security', 'QBtw'], keep='last')
+
+            res = df_ravel.merge(
+                df_target,
+                left_on=['Security', 'target_QBtw'],
+                right_on=['Security', 'QBtw'],
+                suffixes=('_drop', '')
+            )
+
+            # 5. 벡터화된 연산 (루프 없이 한 번에 계산)
+            res['Date'] = res['Date'] + pd.DateOffset(days=90)  # relativedelta 대용
+            res['DBtw'] -= 90
+            res['QBtw'] -= 1
+            res['EQBtw'] -= 1
+
+            # 불필요한 임시 컬럼 제거 및 결과 리스트화
+            res = res.drop(columns=['value', 'target_QBtw', 'QBtw_drop'])
+            return res
+        else:
+            return pd.DataFrame()
+
+    @staticmethod
     def __resform__(data, code, df):
         data['Code'] = code
         data['Sector'] = df.Sector.iloc[-1]
@@ -334,9 +368,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         est = df.groupby('QBtw')['E_ROE'].mean()
 
@@ -368,8 +404,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         Q_result = []
         for Q in df.QBtw.unique():
@@ -442,8 +481,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         Q_result = []
         for Q in df.QBtw.unique():
@@ -529,8 +571,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         Q_result = []
         for Q in df.QBtw.unique():
@@ -598,8 +643,12 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
+
         df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
         df['SecAnl'] = df['Security'] + df['CoreAnalyst']
 
@@ -710,8 +759,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
@@ -758,8 +810,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
@@ -858,8 +913,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
@@ -970,8 +1028,11 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
@@ -1065,8 +1126,12 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
+
+        res = Enhanced_EPS.__fill_missing_est__(df)
+        df = pd.concat([df, res])
+
         df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
         df['SecAnl'] = df['Security'] + df['CoreAnalyst']
 
