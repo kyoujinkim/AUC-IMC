@@ -62,7 +62,7 @@ else:
 result_list = glob(f"result/{country}/mixed_model_EQBtw_Q_sector_*.csv")
 result_list.sort()
 
-recent_q = pd.read_csv(result_list[-1])
+recent_q = pd.read_csv(result_list[-3])
 
 recent_q.loc[recent_q['Sector'] == 0, 'Sector_name'] = mktname
 recent_q.loc[recent_q['Sector'] == '00', 'Sector_name'] = mktname
@@ -93,7 +93,7 @@ for fq in range(0, 4):
 
     df_fq_result = df_fq_min_eqbtw[['Sector_name', 'Sector', 'FY', 'EQBtw', 'earning_G_bld_prev', 'earning_G_bld', 'earning_EW_G_bld', 'surp', 'chg']]
     df_fq_result = df_fq_result.astype({
-        'Sector': str,
+        'Sector': pd.StringDtype(),
         'earning_G_bld': float,
         'earning_G_bld_prev': float,
         'earning_EW_G_bld': float,
@@ -113,7 +113,7 @@ print('Preparing Expected Report Equity Data Sheet...')
 equity_data_list = glob(f"result/{country}/mixed_model_Q_*.csv")
 equity_data_list.sort()
 equity_data = pd.read_csv(equity_data_list[-1], index_col=0).astype({
-    'Sector': str,
+    'Sector': pd.StringDtype(),
 })
 
 # load industry data

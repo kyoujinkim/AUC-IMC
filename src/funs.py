@@ -885,30 +885,23 @@ def build_gdp_scenario(model, gdp_data_path, use_prd:bool=True, use_gdp:bool=Tru
         gdp_roll = gdp.rolling(rolling).mean().dropna()
         gdp_roll = gdp_roll.iloc[-5:]
 
-        total_ts = []
-        for key in tqdm(model.ucurve.keys()):
-
-            popt_af = model.ucurve[key]['popt_af']
-
-            ts = np.linspace(1, 365*2)
-
-            for gdpidx, gdp in gdp_roll.iterrows():
-                tempts = term_spread_now(ts, gdp.values, *popt_af)
-                total_ts.append(pd.Series(tempts, name=f'{key}_{gdpidx.strftime("%Y-%m-%d")}', index=ts))
-
-        total_ts_pd = pd.concat(total_ts, axis=1)
+        keys = list(model.ucurve.keys())
+        gdp_rows = list(gdp_roll.iterrows())
+        ts = np.linspace(1, 365 * 2)
+        col_names = [f'{key}_{gdpidx.strftime("%Y-%m-%d")}' for key in keys for gdpidx, _ in gdp_rows]
+        arr = np.column_stack([
+            term_spread_now(ts, gdp.values, *model.ucurve[key]['popt_af'])
+            for key in tqdm(keys, desc='build_gdp_scenario') for _, gdp in gdp_rows
+        ])
+        total_ts_pd = pd.DataFrame(arr, index=ts, columns=col_names)
 
     else:
-        total_ts = []
-        for key in tqdm(model.ucurve.keys()):
-
-            popt_af = model.ucurve[key]['popt_af']
-
-            ts = np.linspace(1, 365 * 2)
-
-            tempts = term_spread_now(ts, 0, *popt_af)
-            total_ts.append(pd.Series(tempts, name=f'{key}', index=ts))
-
-        total_ts_pd = pd.concat(total_ts, axis=1)
+        keys = list(model.ucurve.keys())
+        ts = np.linspace(1, 365 * 2)
+        arr = np.column_stack([
+            term_spread_now(ts, 0, *model.ucurve[key]['popt_af'])
+            for key in tqdm(keys, desc='build_gdp_scenario')
+        ])
+        total_ts_pd = pd.DataFrame(arr, index=ts, columns=keys)
 
     return total_ts_pd

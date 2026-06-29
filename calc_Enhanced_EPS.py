@@ -132,8 +132,8 @@ def get_shares(x, shares):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ce', '--calc_est', default=True, action='store_true', help='Whether to calculate EPS estimation')
-    parser.add_argument('-cg', '--calc_gdp_effect', default=True, action='store_true', help='Whether to calculate GDP effect')
+    parser.add_argument('--no_calc_est', dest='calc_est', default=True, action='store_false', help='Skip EPS estimation (enabled by default)')
+    parser.add_argument('--no_calc_gdp_effect', dest='calc_gdp_effect', default=True, action='store_false', help='Skip GDP effect calculation (enabled by default)')
     parser.add_argument('-ru', '--reuse_ucurve', default=False, action='store_true', help='Whether to reuse ucurve coefficients')
     parser.add_argument('-rc', '--reuse_cache', default=False, action='store_true', help='Whether to reuse cache data')
     parser.add_argument('-rr', '--reuse_result', default=False, action='store_true', help='Whether to reuse result data')
@@ -219,11 +219,12 @@ if __name__ == '__main__':
                        , country=country
                        , use_cache=True)
 
-    sector_name = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='industry_map', dtype=str).set_index('Code')
-    shares = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='share', index_col=0).astype(float) * 1000
+    with pd.ExcelFile(f'data/{country}/infos.xlsx') as xls:
+        sector_name = pd.read_excel(xls, sheet_name='industry_map', dtype=str).set_index('Code')
+        shares = pd.read_excel(xls, sheet_name='share', index_col=0).astype(float) * 1000
+        comp_name = pd.read_excel(xls, sheet_name='name', index_col=0).astype(str)
     shares = shares[pd.to_numeric(shares.iloc[-1,:], errors='coerce').dropna().index]
     shares.columns = [code.split('(')[0] for code in shares.columns]
-    comp_name = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='name', index_col=0).astype(str)
 
     new_train = train[train.A_EPS_1.abs() / train.BPS < 10]
     if country == 'us':
@@ -279,17 +280,23 @@ if __name__ == '__main__':
         # 만약 Code별로 없는 EQBtw가 있다면, 이전 EQBtw값으로 EQBtw 추가
         result_tmp = []
         for fy, result_fy in tqdm(result.groupby('FY'), desc='Adding EQBtw by FY'):
-            EQBtw_unique = np.sort(result_fy.EQBtw.unique())[::-1]
-            for code, result_code in result_fy.groupby('Code'):
-                result_code_EQBtw = result_code.EQBtw.unique()
-                for EQBtw in EQBtw_unique:
-                    if EQBtw not in result_code_EQBtw:
-                        EQBtw_list = result_code[result_code.EQBtw > EQBtw].EQBtw.unique()
-                        if EQBtw_list.size > 0:
-                            tmprow = result_code[result_code.EQBtw == min(EQBtw_list)].copy()
-                            tmprow.EQBtw = EQBtw
-                            result_tmp.append(tmprow)
-        if len(result_tmp) > 0:
+            all_eqbtw = np.sort(result_fy.EQBtw.unique())  # ascending
+            all_codes = result_fy.Code.unique()
+
+            result_fy_dedup = result_fy.groupby(['Code', 'EQBtw'], sort=False).last()
+            full_mi = pd.MultiIndex.from_product([all_codes, all_eqbtw], names=['Code', 'EQBtw'])
+            result_fy_full = result_fy_dedup.reindex(full_mi)
+
+            # bfill on ascending EQBtw: missing EQBtw gets the data of the next higher EQBtw
+            result_fy_filled = result_fy_full.groupby(level='Code').bfill()
+
+            new_mask = (~result_fy_full.index.isin(result_fy_dedup.index)) & result_fy_filled.notna().any(axis=1)
+            new_rows = result_fy_filled[new_mask].reset_index()
+            new_rows['FY'] = fy
+            result_tmp.append(new_rows)
+
+        result_tmp = [r for r in result_tmp if not r.empty]
+        if result_tmp:
             result_tmp = pd.concat(result_tmp).groupby(['Code', 'FY', 'EQBtw']).last().reset_index()
             result = pd.concat([result, result_tmp])
 

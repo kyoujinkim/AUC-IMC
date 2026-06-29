@@ -1,4 +1,5 @@
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.shared_memory import SharedMemory
 from typing import List
 
@@ -148,8 +149,13 @@ class Enhanced_EPS(object):
         unique_sectors = set(train.SectorClass.unique().tolist() + [np.nan])
 
         listoftable = list(product(unique_sectors, prdFY))
-        for table in tqdm(listoftable):
-            self.ucurve[str(table[0])+str(table[1])] = term_spread_adj(*table, train=train)
+
+        def _fit(table):
+            return str(table[0]) + str(table[1]), term_spread_adj(*table, train=train)
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
+            for key, val in tqdm(pool.map(_fit, listoftable), total=len(listoftable), desc='calc_ucurve'):
+                self.ucurve[key] = val
 
         pd.DataFrame(self.ucurve).to_json(f'result/{country}/ucurve.json')
 

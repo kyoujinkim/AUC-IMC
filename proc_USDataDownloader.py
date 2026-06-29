@@ -186,14 +186,11 @@ class DataDownloader:
                         df_cross4_min = pd.DataFrame(np.nan, index=codes, columns=['GuidanceDate'], dtype='datetime64[ns]')
 
                     df_cross1 = df_cross1[~df_cross1.index.duplicated(keep='first')]
-                    if len(df_cross1.columns) != 2:
-                        df_cross1 = df_cross1.reindex(columns=['GICS Sub-Industry Code', 'Earnings Per Share - Actual'])
+                    df_cross1 = df_cross1.reindex(columns=['GICS Sub-Industry Code', 'Earnings Per Share - Actual'])
                     df_cross2 = df_cross2[~df_cross2.index.duplicated(keep='first')]
-                    if len(df_cross2.columns) != 1:
-                        df_cross2 = df_cross2.reindex(columns=['Earnings Per Share - Actual'])
+                    df_cross2 = df_cross2.reindex(columns=['Earnings Per Share - Actual'])
                     df_cross3 = df_cross3[~df_cross3.index.duplicated(keep='first')]
-                    if len(df_cross3.columns) != 2:
-                        df_cross3 = df_cross3.reindex(columns=['Earnings Per Share - Actual', 'Book Value Per Share - Issue'])
+                    df_cross3 = df_cross3.reindex(columns=['Earnings Per Share - Actual', 'Book Value Per Share - Issue'])
                     df_cross = pd.concat([df_cross1, df_cross2, df_cross3, df_cross4_min], axis=1)
                     df_cross.columns = ['GICS', 'EPS', 'EPS_1Y', 'EPS_2Y', 'BPS', 'GuidanceDate']
 
