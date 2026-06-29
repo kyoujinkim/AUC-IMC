@@ -186,8 +186,14 @@ class DataDownloader:
                         df_cross4_min = pd.DataFrame(np.nan, index=codes, columns=['GuidanceDate'], dtype='datetime64[ns]')
 
                     df_cross1 = df_cross1[~df_cross1.index.duplicated(keep='first')]
+                    if len(df_cross1.columns) != 2:
+                        df_cross1 = df_cross1.reindex(columns=['GICS Sub-Industry Code', 'Earnings Per Share - Actual'])
                     df_cross2 = df_cross2[~df_cross2.index.duplicated(keep='first')]
+                    if len(df_cross2.columns) != 1:
+                        df_cross2 = df_cross2.reindex(columns=['Earnings Per Share - Actual'])
                     df_cross3 = df_cross3[~df_cross3.index.duplicated(keep='first')]
+                    if len(df_cross3.columns) != 2:
+                        df_cross3 = df_cross3.reindex(columns=['Earnings Per Share - Actual', 'Book Value Per Share - Issue'])
                     df_cross = pd.concat([df_cross1, df_cross2, df_cross3, df_cross4_min], axis=1)
                     df_cross.columns = ['GICS', 'EPS', 'EPS_1Y', 'EPS_2Y', 'BPS', 'GuidanceDate']
 
@@ -220,7 +226,7 @@ if __name__ == '__main__':
     dl = DataDownloader()
     dl.open_session(app_key)
     dl.read_list('./data/us/list_total.csv')
-    dl.set_period('Q', 2025, 2027, startquarter=5, endquarter=4)
+    dl.set_period('Q', 2026, 2028, startquarter=2, endquarter=3)
     #dl.set_period('Y', 2024, 2026, startquarter=None, endquarter=None)
 
     dl.run(skip_existing=False)

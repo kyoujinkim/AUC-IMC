@@ -132,11 +132,11 @@ def get_shares(x, shares):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-ce', '--calc_est', type=bool, default=True, help='Whether to calculate EPS estimation')
-    parser.add_argument('-cg', '--calc_gdp_effect', type=bool, default=True, help='Whether to calculate GDP effect')
-    parser.add_argument('-ru', '--reuse_ucurve', type=bool, default=False, help='Whether to reuse ucurve coefficients')
-    parser.add_argument('-rc', '--reuse_cache', type=bool, default=False, help='Whether to reuse cache data')
-    parser.add_argument('-rr', '--reuse_result', type=bool, default=False, help='Whether to reuse result data')
+    parser.add_argument('-ce', '--calc_est', default=True, action='store_true', help='Whether to calculate EPS estimation')
+    parser.add_argument('-cg', '--calc_gdp_effect', default=True, action='store_true', help='Whether to calculate GDP effect')
+    parser.add_argument('-ru', '--reuse_ucurve', default=False, action='store_true', help='Whether to reuse ucurve coefficients')
+    parser.add_argument('-rc', '--reuse_cache', default=False, action='store_true', help='Whether to reuse cache data')
+    parser.add_argument('-rr', '--reuse_result', default=False, action='store_true', help='Whether to reuse result data')
     parser.add_argument('-d', '--prddate', default=(dt.datetime.today()).strftime('%Y-%m-%d'), help='Prediction date in YYYY-MM-DD format')
     parser.add_argument('-s', '--setting', default='US_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
 
@@ -169,11 +169,12 @@ if __name__ == '__main__':
         model_name = 'mixed_model'
     else:
         period = 'Q'
-        prdFY = ['1Q26AS', '2Q26AS', '3Q26AS', '4Q26AS']
+        prdFY = ['2Q26AS', '3Q26AS', '4Q26AS', '1Q27AS']
         # curveFY should include previous 3 years for quarterly data
-        curveFY = ['1Q23AS', '2Q23AS', '3Q23AS', '4Q23AS',
+        curveFY = ['2Q23AS', '3Q23AS', '4Q23AS',
                    '1Q24AS', '2Q24AS', '3Q24AS', '4Q24AS',
-                   '1Q25AS', '2Q25AS', '3Q25AS', '4Q25AS', ] + prdFY
+                   '1Q25AS', '2Q25AS', '3Q25AS', '4Q25AS',
+                   '1Q26AS',] + prdFY
         model_name = 'mixed_model'
 
     if country == 'us':
@@ -218,7 +219,7 @@ if __name__ == '__main__':
                        , country=country
                        , use_cache=True)
 
-    sector_name = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='industry_map', index_col=0, dtype=str)
+    sector_name = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='industry_map', dtype=str).set_index('Code')
     shares = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='share', index_col=0).astype(float) * 1000
     shares = shares[pd.to_numeric(shares.iloc[-1,:], errors='coerce').dropna().index]
     shares.columns = [code.split('(')[0] for code in shares.columns]

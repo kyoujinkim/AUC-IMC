@@ -46,15 +46,15 @@ app_key = config['main']['api_key']
 
 open_session(app_key)
 
-country = 'kr'
-current_quarter = "1Q26AS"
+country = 'us'
+current_quarter = "2Q26AS"
 
 # if sector is '0', change sector name as All(Top Free-Float Mkt Cap 500)
 if country == 'us':
     mktname = 'All(Top Free-Float Mkt Cap 500)'
     sector_len = 2
 elif country == 'kr':
-    mktname = 'All(Coverage Analyst >= 3'
+    mktname = 'All(Coverage Analyst >= 3)'
     sector_len = 3
 else:
     raise ValueError("Unsupported country code")
@@ -92,12 +92,14 @@ for fq in range(0, 4):
     df_fq_min_eqbtw = df_fq[df_fq['EQBtw']==min_eqbtw]
 
     df_fq_result = df_fq_min_eqbtw[['Sector_name', 'Sector', 'FY', 'EQBtw', 'earning_G_bld_prev', 'earning_G_bld', 'earning_EW_G_bld', 'surp', 'chg']]
-    df_fq_result = df_fq_result.astype({'earning_G_bld': float,
-                                   'earning_G_bld_prev': float,
-                                   'earning_EW_G_bld': float,
-                                   'chg': float,
-                                   'surp': float},
-                                       errors='ignore')
+    df_fq_result = df_fq_result.astype({
+        'Sector': str,
+        'earning_G_bld': float,
+        'earning_G_bld_prev': float,
+        'earning_EW_G_bld': float,
+        'chg': float,
+        'surp': float},
+        errors='ignore')
 
     df_fq_result['Sector_len'] = df_fq_result['Sector'].str.len()
     df_fq_result = df_fq_result.sort_values(by=['Sector_len','Sector']).drop('Sector_len', axis=1)
@@ -110,11 +112,13 @@ print('Preparing Expected Report Equity Data Sheet...')
 # make expected report date sheet
 equity_data_list = glob(f"result/{country}/mixed_model_Q_*.csv")
 equity_data_list.sort()
-equity_data = pd.read_csv(equity_data_list[-1], index_col=0)
+equity_data = pd.read_csv(equity_data_list[-1], index_col=0).astype({
+    'Sector': str,
+})
 
 # load industry data
-ind = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='industry_map', index_col=0, dtype=str)
-equity_data['SectorCode'] = equity_data['Sector'].astype(str).str[:sector_len]
+ind = pd.read_excel(f'data/{country}/infos.xlsx', sheet_name='industry_map', dtype=str).set_index('Code')
+equity_data['SectorCode'] = equity_data['Sector'].str[:sector_len]
 equity_data['GICS Sector'] = equity_data['SectorCode'].map(ind['Sector'])
 equity_data['GICS Industry'] = equity_data['Sector'].map(ind['Sector'])
 
