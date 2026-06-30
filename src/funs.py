@@ -225,8 +225,7 @@ def build_data(path: str = './data/consenlist/*.csv'
                , rolling: int = 0
                , ts_length: int = 10
                , sector_len: int = 2
-               , country: str = 'kr'
-               , use_cache: bool = False):
+               , country: str = 'kr'):
     '''
     build dataset for calculate Smart Consensus
     :param path: estimation data path
@@ -241,10 +240,6 @@ def build_data(path: str = './data/consenlist/*.csv'
     '''
     if country not in ['kr', 'us']:
         raise ValueError('country should be either kr or us')
-
-    if use_cache:
-        if os.path.exists('./cache/cache.parquet'):
-            return pd.read_parquet('./cache/cache.parquet', engine="pyarrow")
 
     print('Building dataset...')
 
@@ -361,6 +356,10 @@ def build_data(path: str = './data/consenlist/*.csv'
     df['totalDiff'] = df['YearDiff'] * 12 + df['MonthDiff']
     df['EQBtw'] = (df['totalDiff'] / 3).astype(int)
     df['Year'] = df.Year.astype(str)
+
+    temp_today = dt.datetime.today()
+    df['totalDiff'] = (temp_today.year - df.Date.dt.year) * 12 + (temp_today.month - df.Date.dt.month)
+    df['CQBtw'] = (df['totalDiff'] / 3).astype(int)
 
     df = df.drop(['YearDiff', 'MonthDiff', 'totalDiff', 'equalEDate'], axis=1)
     df['CutDate'] = df['FilingDeadline']
@@ -786,6 +785,27 @@ def EW_cache(x):
     data = result_formatter(data, code, df, 0, 0)
 
     return data
+
+def generate_financial_periods(start_prd, suffix='AS'):
+    # '2Q26' 또는 '2Q26AS'에서 접미사 제거 후 분기/연도 추출
+    clean_prd = start_prd.replace(suffix, '')
+    quarter = int(clean_prd[0])
+    year = int(clean_prd[2:]) + 2000  # 26 -> 2026
+
+    # pandas Period 객체로 변환 (예: 2026Q2)
+    base_period = pd.Period(f"{year}Q{quarter}", freq='Q')
+
+    # 1. prdFY 생성 (기준 분기 포함 향후 4개 분기)
+    prd_periods = [base_period + i for i in range(4)]
+    prdFY = [f"{p.quarter}Q{str(p.year)[2:]}{suffix}" for p in prd_periods]
+
+    # 2. curveFY 생성 (과거 3개년 = 12개 분기 전부터 prdFY의 마지막 분기까지)
+    # 총 개수: 과거 12개 분기 + prdFY 4개 분기 = 16개 분기
+    start_curve_period = base_period - 12
+    curve_periods = [start_curve_period + i for i in range(16)]
+    curveFY = [f"{p.quarter}Q{str(p.year)[2:]}{suffix}" for p in curve_periods]
+
+    return prdFY, curveFY
 
 def EW_duckdb(x):
 

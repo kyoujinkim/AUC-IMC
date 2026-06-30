@@ -14,10 +14,18 @@ warnings.filterwarnings('ignore')
 
 
 class Enhanced_EPS(object):
-    def __init__(self):
+    def __init__(self, q_basis='QBtw'):
+        '''
+        Dividend Calculation Class
+        :param q_basis: Either 'QBtw' or 'CQBtw'. QBtw is for quarterly distance between estimated report date. CQBtw is for Calendar distance from now.
+        '''
         self.ucurve = dict()
         self.min_count = 2
         self.year_range = 10
+        if q_basis in ['QBtw', 'CQBtw']:
+            self.q_basis = q_basis
+        else:
+            raise ValueError("q_basis should be 'QBtw' or 'CQBtw'")
 
     #set base data for calculation
     def set_data(self, train):
@@ -262,8 +270,10 @@ class Enhanced_EPS(object):
         # calculate with best model
         symwithbm = []
         for sym in UniqueSymbol:
-            symwithbm.append([sym, bestmodel.get(sym, 'EW'), self.shm_train, self.shm_ucurve])
-        result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
+            symwithbm.append([sym, bestmodel.get(sym, 'EW'), self.shm_train, self.shm_ucurve, self.q_basis])
+        for sym in symwithbm:
+            result = Enhanced_EPS.__calc__(sym)
+        #result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
 
         return pd.concat(result)
 
@@ -276,17 +286,14 @@ class Enhanced_EPS(object):
 
         symwithbm = []
         for sym in UniqueSymbol:
-            symwithbm.append([sym, model_name, self.shm_train, self.shm_ucurve])
+            symwithbm.append([sym, model_name, self.shm_train, self.shm_ucurve, self.q_basis])
         result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
 
         return pd.concat(result)
 
     @staticmethod
     def __calc__(x):
-        UniqueSymbol = x[0]
         model_name = x[1]
-        shm_train = x[2]
-        shm_ucurve = x[3]
 
         if model_name == 'EW':
             dataset = Enhanced_EPS.__EW__(x)
@@ -318,34 +325,66 @@ class Enhanced_EPS(object):
             return dataset
 
     @staticmethod
-    def __fill_missing_est__(df):
-        df_pivot = pd.pivot_table(df, values='E_EPS', columns=['Security'], index=['QBtw'], aggfunc='last').ffill()
+    def __fill_missing_est__(df, q_basis):
+        df = df.sort_values('Date')
+        df_pivot = pd.pivot_table(df, values='E_EPS', columns=['Security'], index=[q_basis], aggfunc='last').ffill()
+        # 최솟값부터 최댓값까지 빠짐없이 있어야 할 풀 세트 생성: {1, 2, 3, 4, 5}
+        full_set = set(range(df_pivot.index[0], df_pivot.index[-1] + 1))
+        missing_elements = full_set - set(df_pivot.index)
+
+        # fill up missing rows
+        for me in missing_elements:
+            df_pivot.loc[me] = np.nan
+        df_pivot = df_pivot.sort_index().ffill()
+
         df_ravel = df_pivot.melt(ignore_index=False).reset_index()
         df_ravel = df_ravel[df_ravel.value.isna()]
 
         if not df_ravel.empty:
             # 3. 'r['QBtw']+1'에 해당하는 데이터를 한 번에 가져오기 위해 조인 키 생성
-            df_ravel['target_QBtw'] = df_ravel['QBtw'] + 1
+            df_ravel['target_QBtw'] = df_ravel[q_basis] + 1
 
             # 4. 원본 df에서 필요한 컬럼만 추출하여 병합 (Security와 QBtw를 기준으로 매칭)
             # iloc[-1]의 효과를 내기 위해 drop_duplicates로 마지막 값만 남긴 df_target 사용
-            df_target = df.drop_duplicates(subset=['Security', 'QBtw'], keep='last')
+            df_target = df.drop_duplicates(subset=['Security', q_basis], keep='last').sort_values(q_basis)
+            df_target['target_QBtw'] = df_target[q_basis]
+
+            # Type Competence 확보
+            df_ravel['target_QBtw'] = df_ravel['target_QBtw'].astype(int)
+            df_target['target_QBtw'] = df_target['target_QBtw'].astype(int)
+            df_ravel = df_ravel.sort_values('target_QBtw', ignore_index=True)
+            df_target = df_target.sort_values('target_QBtw', ignore_index=True)
+
+            '''# 2. merge_asof 실행
+            res = pd.merge_asof(
+                df_ravel,
+                df_target,
+                on='target_QBtw',  # 기준이 되는 주기 컬럼
+                by='Security',  # 종목별로 그룹을 묶어서 매칭
+                direction='forward',  # ★ 핵심: 내 주기보다 '크거나 같은' 값 중 가장 가까운 것 선택
+                suffixes=('_main', '')
+            )'''
 
             res = df_ravel.merge(
                 df_target,
                 left_on=['Security', 'target_QBtw'],
-                right_on=['Security', 'QBtw'],
-                suffixes=('_drop', '')
+                right_on=['Security', 'target_QBtw'],
+                suffixes=('_main', '')
             )
 
-            # 5. 벡터화된 연산 (루프 없이 한 번에 계산)
-            res['Date'] = res['Date'] + pd.DateOffset(days=90)  # relativedelta 대용
-            res['DBtw'] -= 90
-            res['QBtw'] -= 1
-            res['EQBtw'] -= 1
+            res = res.dropna(subset=['E_EPS'])
+
+            res['Q_diff'] = res[q_basis] - res[f'{q_basis}_main']
+            res['Date'] += pd.to_timedelta(res['Q_diff'] * 90, unit='D')
+            #res['DBtw'] -= res['Q_diff'] * 90 # We need to fix DBtw to adapt term spread, since term spread function adjusting based on DBtw
+            res['QBtw'] -= res['Q_diff']
+            res['EQBtw'] -= res['Q_diff']
+
+            # Change main with q_basis
+            res[q_basis] = res[f'{q_basis}_main']
 
             # 불필요한 임시 컬럼 제거 및 결과 리스트화
-            res = res.drop(columns=['value', 'target_QBtw', 'QBtw_drop'])
+            res = res.drop(columns=['value', 'target_QBtw', f'{q_basis}_main'])
             return res
         else:
             return pd.DataFrame()
@@ -366,25 +405,27 @@ class Enhanced_EPS(object):
     def __EW__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-3]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         df = train[train.UniqueSymbol==symbol]
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
-        est = df.groupby('QBtw')['E_ROE'].mean()
+        est = df.groupby(q_basis)['E_ROE'].mean()
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, est, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -400,8 +441,10 @@ class Enhanced_EPS(object):
     def __PBest__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-3]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         star_count = 5
 
@@ -410,26 +453,19 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         Q_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 4))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))
+                             & (train[q_basis] == Q)]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
             # list to append previous year's error rate by analyst
             tempset = []
@@ -445,23 +481,23 @@ class Enhanced_EPS(object):
             if len(tempset) > 0:
                 prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
                 # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_star_count = df[(df.QBtw == Q) & (df.Security.isin(prev_error.nsmallest(star_count, 'Error').index))]
+                check_star_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.nsmallest(star_count, 'Error').index))]
                 if len(check_star_count) < 2:
-                    Q_result.append(df[df.QBtw == Q])
+                    Q_result.append(df[df[q_basis] == Q])
                 else:
                     Q_result.append(check_star_count)
             else:
-                Q_result.append(df[df.QBtw == Q])
+                Q_result.append(df[df[q_basis] == Q])
 
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
         if len(Q_result) > 0:
             df = pd.concat(Q_result)
 
-        est = df.groupby('QBtw')['E_ROE'].mean()
+        est = df.groupby(q_basis)['E_ROE'].mean()
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -477,8 +513,10 @@ class Enhanced_EPS(object):
     def __IMSE__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-3]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         min_count = 5
 
@@ -487,26 +525,19 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         Q_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
+                             & (train[q_basis] == Q)]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
             # list to append previous year's error rate by analyst
             tempset = []
@@ -522,9 +553,9 @@ class Enhanced_EPS(object):
             if len(tempset) > 0:
                 prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
                 # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_prev_count = df[(df.QBtw == Q) & (df.Security.isin(prev_error.index))]
+                check_prev_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.index))]
                 if len(check_prev_count) < min_count:
-                    check_prev_count = df[df.QBtw == Q]
+                    check_prev_count = df[df[q_basis] == Q]
                     check_prev_count['PrevError'] = 1
                     Q_result.append(check_prev_count)
                 else:
@@ -532,7 +563,7 @@ class Enhanced_EPS(object):
                         lambda x: prev_error.loc[x.Security].values[0], axis=1)
                     Q_result.append(check_prev_count)
             else:
-                check_prev_count = df[df.QBtw == Q]
+                check_prev_count = df[df[q_basis] == Q]
                 check_prev_count['PrevError'] = 1
                 Q_result.append(check_prev_count)
 
@@ -546,12 +577,12 @@ class Enhanced_EPS(object):
         df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 3 * df_std, upper=df_mean + 3 * df_std)
         df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
 
-        est = df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum()
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        est = df.groupby(q_basis)['W_E_ROE'].sum() / df.groupby(q_basis)['I_PrevError'].sum()
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -567,8 +598,10 @@ class Enhanced_EPS(object):
     def __BAM__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-3]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         min_count = 5
 
@@ -577,26 +610,19 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         Q_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 10))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 11))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
+                             & (train[q_basis] == Q)]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
             # list to append previous year's error rate by analyst
             lenYear = len(tempdata.Year.unique())
@@ -617,13 +643,13 @@ class Enhanced_EPS(object):
 
         coeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
         # with slope and intercept, calculate BAM
-        est = df.groupby('QBtw')[['E_ROE']].mean()
+        est = df.groupby(q_basis)[['E_ROE']].mean()
         est = est.apply(lambda x: apply_bam(x, coeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -639,8 +665,10 @@ class Enhanced_EPS(object):
     def __IMC__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-3]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         min_count = 5
 
@@ -649,10 +677,10 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
@@ -667,19 +695,12 @@ class Enhanced_EPS(object):
         Q_result = []
         S_result = []
 
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 10))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 11))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
+                             & (train[q_basis] == Q)]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
             if len(tempdata) > 0:
                 tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
@@ -691,8 +712,8 @@ class Enhanced_EPS(object):
                     temp = tempdata[tempdata.SecAnl == S]
                     if len(temp) >= 10 and len(temp.Year.unique()) >= min_count:
                         try:
-                            lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),
-                                                                                  tempdata['A_ROE'])
+                            lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(temp['E_ROE']),
+                                                                                  temp['A_ROE'])
                             slope = lr_result.coef_[0]
                             intercept = lr_result.intercept_
                         except:
@@ -734,13 +755,13 @@ class Enhanced_EPS(object):
 
         Qcoeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
         # with slope and intercept, calculate BAM
-        est = df.groupby('QBtw')[['E_ROE']].mean()
+        est = df.groupby(q_basis)[['E_ROE']].mean()
         est = est.apply(lambda x: apply_bam(x, Qcoeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -756,8 +777,10 @@ class Enhanced_EPS(object):
     def __EW_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-1]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         ucurve = Enhanced_EPS.__load_memory__(shm_ucurve)
@@ -765,10 +788,10 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         year = symbol[-6:]
@@ -784,12 +807,12 @@ class Enhanced_EPS(object):
                                   else term_spread(x, *popt_af)
                                   , axis=1).fillna(0))
 
-        est = df.groupby('QBtw')['E_ROE'].mean()
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        est = df.groupby(q_basis)['E_ROE'].mean()
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        estEW_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, estEW_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -805,8 +828,10 @@ class Enhanced_EPS(object):
     def __PBest_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-1]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         star_count = 5
 
@@ -816,10 +841,10 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         year = symbol[-6:]
@@ -836,31 +861,17 @@ class Enhanced_EPS(object):
                                   , axis=1).fillna(0))
 
         Q_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 4))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))
+                             & (train[q_basis] == Q)]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
-            if Q < 4:
-                if popt_af[0] == 0:
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (
-                            tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
-            else:
-                if popt_bf[0] == 0:
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (
-                            tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
-            tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata[q_basis] == Q)]
+            tempdata['E_ROE'] = (
+                        tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
 
             # list to append previous year's error rate by analyst
             tempset = []
@@ -876,23 +887,23 @@ class Enhanced_EPS(object):
             if len(tempset) > 0:
                 prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
                 # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_star_count = df[(df.QBtw == Q) & (df.Security.isin(prev_error.nsmallest(star_count, 'Error').index))]
+                check_star_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.nsmallest(star_count, 'Error').index))]
                 if len(check_star_count) < 2:
-                    Q_result.append(df[df.QBtw == Q])
+                    Q_result.append(df[df[q_basis] == Q])
                 else:
                     Q_result.append(check_star_count)
             else:
-                Q_result.append(df[df.QBtw == Q])
+                Q_result.append(df[df[q_basis] == Q])
 
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
         if len(Q_result) > 0:
             df = pd.concat(Q_result)
 
-        est = df.groupby('QBtw')['E_ROE'].mean()
+        est = df.groupby(q_basis)['E_ROE'].mean()
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -908,8 +919,10 @@ class Enhanced_EPS(object):
     def __IMSE_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-1]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         min_count = 5
 
@@ -919,10 +932,10 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         year = symbol[-6:]
@@ -939,28 +952,17 @@ class Enhanced_EPS(object):
                                   , axis=1).fillna(0))
 
         Q_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
-            if Q < 4:
-                if popt_af[0] == 0:
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (
-                            tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
-            else:
-                if popt_bf[0] == 0:
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (
-                            tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
+            if popt_af[0] == 0:
+                tempdata = tempdata[(tempdata[q_basis] == Q)]
+            tempdata['E_ROE'] = (
+                        tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+
             tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
             # list to append previous year's error rate by analyst
@@ -977,9 +979,9 @@ class Enhanced_EPS(object):
             if len(tempset) > 0:
                 prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
                 # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_prev_count = df[(df.QBtw == Q) & (df.Security.isin(prev_error.index))]
+                check_prev_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.index))]
                 if len(check_prev_count) < min_count:
-                    check_prev_count = df[df.QBtw == Q]
+                    check_prev_count = df[df[q_basis] == Q]
                     check_prev_count['PrevError'] = 1
                     Q_result.append(check_prev_count)
                 else:
@@ -987,7 +989,7 @@ class Enhanced_EPS(object):
                         lambda x: prev_error.loc[x.Security].values[0], axis=1)
                     Q_result.append(check_prev_count)
             else:
-                check_prev_count = df[df.QBtw == Q]
+                check_prev_count = df[df[q_basis] == Q]
                 check_prev_count['PrevError'] = 1
                 Q_result.append(check_prev_count)
 
@@ -1002,12 +1004,12 @@ class Enhanced_EPS(object):
         df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 5 * df_std, upper=df_mean + 5 * df_std)
         df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
 
-        est = df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum()
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        est = df.groupby(q_basis)['W_E_ROE'].sum() / df.groupby(q_basis)['I_PrevError'].sum()
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -1023,8 +1025,10 @@ class Enhanced_EPS(object):
     def __BAM_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-1]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         min_count = 5
 
@@ -1034,10 +1038,10 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         year = symbol[-6:]
@@ -1054,30 +1058,18 @@ class Enhanced_EPS(object):
                                   , axis=1).fillna(0))
 
         Q_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 10))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 11))
-                                 & (train.QBtw == Q)]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
+                             & (train[q_basis] == Q)]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
-            if Q < 4:
-                if pd.isna(popt_af[0]):
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (
-                            tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
-            else:
-                if pd.isna(popt_bf[0]):
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (
-                            tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
+            if pd.isna(popt_af[0]):
+                tempdata = tempdata[(tempdata[q_basis] == Q)]
+            tempdata['E_ROE'] = (
+                        tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+
             tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
             # list to append previous year's error rate by analyst
@@ -1099,13 +1091,13 @@ class Enhanced_EPS(object):
 
         coeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
         # with slope and intercept, calculate BAM
-        est = df.groupby('QBtw')[['E_ROE']].mean()
+        est = df.groupby(q_basis)[['E_ROE']].mean()
         est = est.apply(lambda x: apply_bam(x, coeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
@@ -1121,8 +1113,10 @@ class Enhanced_EPS(object):
     def __IMC_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        shm_train = x[-2]
-        shm_ucurve = x[-1]
+        model = x[1]
+        shm_train = x[2]
+        shm_ucurve = x[3]
+        q_basis = x[4]
 
         min_count = 5
 
@@ -1132,10 +1126,10 @@ class Enhanced_EPS(object):
         if len(df) == 0:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'], keep='last')
+        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
         df['E_ROE_o'] = df['E_ROE'].copy()
 
-        res = Enhanced_EPS.__fill_missing_est__(df)
+        res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
         df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
@@ -1156,28 +1150,17 @@ class Enhanced_EPS(object):
 
         Q_result = []
         S_result = []
-        for Q in df.QBtw.unique():
-            if Q < 4:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 10))
-                                ]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            else:
-                tempdata = train[(train.Code == df.Code.iloc[0])
-                                 & (train.Year <= str(int(df.Year.iloc[0]) - 2))
-                                 & (train.Year >= str(int(df.Year.iloc[0]) - 11))
-                                ]
-                tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
+        for Q in df[q_basis].unique():
+            tempdata = train[(train.Code == df.Code.iloc[0])
+                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
+                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
+                            ]
+            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
 
-            if Q < 4:
-                if pd.isna(popt_af[0]):
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
-            else:
-                if pd.isna(popt_bf[0]):
-                    tempdata = tempdata[(tempdata.QBtw == Q)]
-                tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0))
+            if pd.isna(popt_af[0]):
+                tempdata = tempdata[(tempdata[q_basis] == Q)]
+            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+
             tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
 
             if len(tempdata) > 0:
@@ -1234,13 +1217,13 @@ class Enhanced_EPS(object):
 
         Qcoeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
         # with slope and intercept, calculate BAM
-        est = df.groupby('QBtw')[['E_ROE']].mean()
+        est = df.groupby(q_basis)[['E_ROE']].mean()
         est = est.apply(lambda x: apply_bam(x, Qcoeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
+        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
 
-        est_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
+        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
 
-        eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
+        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
 
         data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
         data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']

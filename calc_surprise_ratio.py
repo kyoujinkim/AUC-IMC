@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from calc_Enhanced_EPS import get_shares, eps_growth, get_sector_growth_rate
+from run import get_shares, eps_growth, get_sector_growth_rate
 
 def groupby_func(df, cols):
     result = df.groupby(cols)[['Est', 'EW', 'EW_prev', 'EPS_G', 'EPS_EW_G']].median()

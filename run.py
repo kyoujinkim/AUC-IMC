@@ -134,11 +134,12 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--no_calc_est', dest='calc_est', default=True, action='store_false', help='Skip EPS estimation (enabled by default)')
     parser.add_argument('--no_calc_gdp_effect', dest='calc_gdp_effect', default=True, action='store_false', help='Skip GDP effect calculation (enabled by default)')
-    parser.add_argument('-ru', '--reuse_ucurve', default=False, action='store_true', help='Whether to reuse ucurve coefficients')
-    parser.add_argument('-rc', '--reuse_cache', default=False, action='store_true', help='Whether to reuse cache data')
+    parser.add_argument('-ru', '--reuse_ucurve', default=True, action='store_true', help='Whether to reuse ucurve coefficients')
+    parser.add_argument('-rc', '--reuse_cache', default=True, action='store_true', help='Whether to reuse cache data')
     parser.add_argument('-rr', '--reuse_result', default=False, action='store_true', help='Whether to reuse result data')
     parser.add_argument('-d', '--prddate', default=(dt.datetime.today()).strftime('%Y-%m-%d'), help='Prediction date in YYYY-MM-DD format')
     parser.add_argument('-s', '--setting', default='US_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
+    parser.add_argument('-qb', '--q-basis', default='CQBtw', choices=['QBtw','CQBtw'], help='Basis for quarterly data')
 
     return parser.parse_args()
 
@@ -150,6 +151,7 @@ if __name__ == '__main__':
     calc_gdp_effect = args.calc_gdp_effect
     reuse_ucurve = args.reuse_ucurve
     reuse_cache = args.reuse_cache
+    q_basis = args.q_basis
     reuse_result = args.reuse_result
 
     #prddate as today
@@ -202,22 +204,22 @@ if __name__ == '__main__':
 
     print('build train data')
 
-    if not reuse_cache:
+    if reuse_cache:
         if os.path.exists(f'./cache/cache.parquet'):
-        #    # remove cache
-            os.remove(f'./cache/cache.parquet')
-
-    train = build_data(f'data/{country}/consenlist/*.csv'
-                       , period=period
-                       , use_gdp=use_gdp
-                       , gdp_path=gdp_path
-                       , gdp_header=gdp_header
-                       , gdp_lag=gdp_lag
-                       , rolling=rolling
-                       , ts_length=ts_length
-                       , sector_len=sector_len
-                       , country=country
-                       , use_cache=True)
+            train = pd.read_parquet('./cache/cache.parquet', engine="pyarrow")
+        else:
+            raise ValueError('No Path exists for cache.parquet')
+    else:
+        train = build_data(f'data/{country}/consenlist/*.csv'
+                           , period=period
+                           , use_gdp=use_gdp
+                           , gdp_path=gdp_path
+                           , gdp_header=gdp_header
+                           , gdp_lag=gdp_lag
+                           , rolling=rolling
+                           , ts_length=ts_length
+                           , sector_len=sector_len
+                           , country=country)
 
     with pd.ExcelFile(f'data/{country}/infos.xlsx') as xls:
         sector_name = pd.read_excel(xls, sheet_name='industry_map', dtype=str).set_index('Code')
@@ -243,7 +245,7 @@ if __name__ == '__main__':
     # make some changes(sector classification, prediction date) to the train data
     train = train[train.Date <= prddate]
 
-    model = Enhanced_EPS()
+    model = Enhanced_EPS(q_basis=q_basis)
     model.set_data(train)
     model.calc_ucurve(country, curveFY, train, reuse=reuse_ucurve)
 
@@ -267,11 +269,11 @@ if __name__ == '__main__':
 
         # 만약 실적이 발표되었으나 0 QBtw가 없다면, 0 QBtw 추가
         result_tmp = []
-        for code in tqdm(result.Code.unique(), desc='Adding 0 QBtw'):
-            if not(0 in result[result.Code == code].QBtw.unique()) and (result[result.Code == code].EPS_Actual.notnull().all()):
+        for code in tqdm(result.Code.unique(), desc=f'Adding 0 {q_basis}'):
+            if not(0 in result[result.Code == code][q_basis].unique()) and (result[result.Code == code].EPS_Actual.notnull().all()):
                 tmprow = result[result.Code == code].copy().iloc[0:1]
-                tmprow.EQBtw -= tmprow.QBtw
-                tmprow.QBtw = 0
+                tmprow.EQBtw -= tmprow[q_basis]
+                tmprow[q_basis] = 0
                 result_tmp.append(tmprow)
         if len(result_tmp) > 0:
             result_tmp = pd.concat(result_tmp).groupby(['Code', 'FY', 'EQBtw']).last().reset_index()
@@ -279,7 +281,7 @@ if __name__ == '__main__':
 
         # 만약 Code별로 없는 EQBtw가 있다면, 이전 EQBtw값으로 EQBtw 추가
         result_tmp = []
-        for fy, result_fy in tqdm(result.groupby('FY'), desc='Adding EQBtw by FY'):
+        for fy, result_fy in tqdm(result.groupby('FY'), desc=f'Adding {q_basis} by FY'):
             all_eqbtw = np.sort(result_fy.EQBtw.unique())  # ascending
             all_codes = result_fy.Code.unique()
 
@@ -322,8 +324,8 @@ if __name__ == '__main__':
         # 현분기 실적 전망치 제작
         result['EPS_Est'] = result.Est * result.BPS
         result['EPS_EW'] = result.EW * result.BPS
-        result['EPS_Est_bld'] = result.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x.QBtw == 0) else x.Est * x.BPS, axis=1)
-        result['EPS_EW_bld'] = result.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x.QBtw == 0) else x.EW * x.BPS, axis=1)
+        result['EPS_Est_bld'] = result.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x[q_basis] == 0) else x.Est * x.BPS, axis=1)
+        result['EPS_EW_bld'] = result.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x[q_basis] == 0) else x.EW * x.BPS, axis=1)
         # get min EQBtw's EPS estimation
         result['FY_prev'] = result.FY.apply(model.shift_period)
         result_minEQBtw = result.groupby(['Code','FY']).EQBtw.idxmin()
@@ -341,7 +343,7 @@ if __name__ == '__main__':
         result['EPS_G_caption'] = result.apply(lambda x: eps_growth(x, est_name='EPS_Est', y1_name='EPS_1Y_EW', caption=True), axis=1)
 
         # 이미 실적이 발표되었으나, QBtw가 0이 아닌 경우, 값을 NA로 변경
-        result.loc[(result.EPS_Actual.notnull()) & (result.QBtw != 0), 'EPS_Actual'] = np.nan
+        result.loc[(result.EPS_Actual.notnull()) & (result[q_basis] != 0), 'EPS_Actual'] = np.nan
 
         # Sector별로 median값을 구하기 위해 Sector를 sector_groupby_len만큼 자름
         result['Sector'] = result['Sector'].str[:sector_groupby_len]
@@ -350,7 +352,7 @@ if __name__ == '__main__':
         # get data by Code and PeriodEndDate
         result['shares'] = result.apply(lambda x:get_shares(x, shares=shares), axis=1)
         result['name'] = result.apply(lambda x: comp_name.loc[x.Code] if x.Code in comp_name.index else np.nan, axis=1)
-        result = result.sort_values(['Code','FY','EQBtw','QBtw'])
+        result = result.sort_values(['Code','FY','EQBtw',q_basis])
         # data 저장
         result.groupby(['Code','FY','EQBtw']).first().reset_index().sort_values(['Code','FY','EQBtw'], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{period}_{prddate}.csv', encoding='utf-8-sig')
 
@@ -359,9 +361,9 @@ if __name__ == '__main__':
         result_sector.sort_values(['Sector','FY','EQBtw'], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_EQBtw_{period}_sector_{prddate}.csv', encoding='utf-8-sig')
 
         # 최근 QBtw에 대한 snapshot 형태 data 제작
-        result_snapshot = result.reset_index().set_index(['Code', 'QBtw']).loc[result.groupby('Code').QBtw.min().reset_index().set_index(['Code','QBtw']).index]
-        result_sector = groupby_sector(result_snapshot, sector_name, 'QBtw')
-        result_sector.to_csv(f'./result/{country}/{model_name}_QBtw_{period}_{prddate}.csv', encoding='utf-8-sig')
+        result_snapshot = result.reset_index().set_index(['Code', q_basis]).loc[result.groupby('Code')[q_basis].min().reset_index().set_index(['Code',q_basis]).index]
+        result_sector = groupby_sector(result_snapshot, sector_name, q_basis)
+        result_sector.sort_values(['Sector','FY',q_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{q_basis}_{period}_{prddate}.csv', encoding='utf-8-sig')
 
         print('Step1 Finished')
 
