@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "research-context.schema.json",
+  "title": "Consensus research context",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "snapshot_dates",
+    "provenance",
+    "methodology",
+    "sectors",
+    "validation_summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "snapshot_dates": {
+      "type": "object",
+      "required": ["old", "new"],
+      "additionalProperties": false,
+      "properties": {
+        "old": {"type": "string", "format": "date"},
+        "new": {"type": "string", "format": "date"}
+      }
+    },
+    "provenance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "kind": {"type": "string"},
+          "as_of_date": {"type": "string", "format": "date"},
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "methodology": {"type": "object"},
+    "market": {"type": "object"},
+    "sectors": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/sector"}
+    },
+    "validation_summary": {"type": "object"}
+  },
+  "$defs": {
+    "sector": {
+      "type": "object",
+      "required": ["sector"],
+      "additionalProperties": false,
+      "properties": {
+        "sector": {"type": "string", "minLength": 1},
+        "sector_name": {"type": "string"},
+        "signals": {"type": "object"},
+        "revisions": {"type": "object"},
+        "forward_revision": {"type": ["number", "null"]},
+        "revision_slope": {"type": ["number", "null"]},
+        "breadth": {"type": "object"},
+        "company_revision_stats": {"type": "object"},
+        "coverage": {"type": "object"},
+        "growth": {"type": "object"},
+        "denominator_instability_by_horizon": {"type": "object"},
+        "quality_flags": {"type": "object"},
+        "component_values": {"type": "object"},
+        "component_ranks": {"type": "object"},
+        "component_rank_methods": {"type": "object"},
+        "research_prior": {"type": ["number", "null"]},
+        "contributions": {"type": "object"}
+      }
+    }
+  }
+}
