@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+from consensus_context import features
 from consensus_context.alignment import (
     align_company_snapshots,
     align_sector_snapshots,
@@ -207,3 +208,128 @@ def test_fewer_than_ten_matches_trips_the_combined_coverage_gate():
 
     assert result["quality_flags"]["insufficient_coverage"] is True
     assert result["quality_flags"]["insufficient_matched_companies"] is True
+
+
+def test_sector_totals_exclude_rows_without_a_finite_old_new_pair():
+    sector_panel = pd.DataFrame(
+        [
+            {
+                "Sector": "4510",
+                "FY": "FY1",
+                "CQBtw": 1,
+                "old_earning_total": 100.0,
+                "new_earning_total": 110.0,
+            },
+            {
+                "Sector": "4520",
+                "FY": "FY1",
+                "CQBtw": 1,
+                "old_earning_total": 100.0,
+                "new_earning_total": float("nan"),
+            },
+        ]
+    )
+
+    result = build_sector_features(pd.DataFrame(), sector_panel)[0]
+
+    assert result["revisions"][1] == pytest.approx(0.10)
+
+
+def test_coverage_only_sector_is_emitted_with_unavailable_signals_and_flags():
+    company_panel = pd.DataFrame()
+    company_panel.attrs["coverage"] = [
+        {
+            "top_sector": "45",
+            "FY": "FY1",
+            "CQBtw": 1,
+            "old_count": 12,
+            "new_count": 4,
+            "matched_count": 0,
+            "entrant_count": 4,
+            "exit_count": 12,
+            "matched_coverage": 0.0,
+        }
+    ]
+
+    result = build_sector_features(company_panel, pd.DataFrame())
+
+    assert len(result) == 1
+    sector = result[0]
+    assert sector["sector"] == "45"
+    assert sector["revisions"] == {0: None, 1: None, 2: None, 3: None}
+    assert sector["forward_revision"] is None
+    assert sector["coverage"][1]["entrant_count"] == 4
+    assert sector["quality_flags"]["insufficient_coverage"] is True
+    assert sector["quality_flags"]["insufficient_matched_companies"] is True
+
+
+def test_company_sector_migration_is_an_exit_and_entrant_but_remains_matched():
+    old = pd.DataFrame(
+        [
+            {
+                "Code": "A",
+                "FY": "2026Q4",
+                "CQBtw": 1,
+                "LSector": "4510",
+                "EPS_Est": 10.0,
+            }
+        ]
+    )
+    new = pd.DataFrame(
+        [
+            {
+                "Code": "A",
+                "FY": "2026Q4",
+                "CQBtw": 1,
+                "LSector": "5010",
+                "EPS_Est": 11.0,
+            }
+        ]
+    )
+
+    panel = align_company_snapshots(old, new)
+    coverage = {row["top_sector"]: row for row in panel.attrs["coverage"]}
+
+    assert panel["Code"].tolist() == ["A"]
+    assert coverage["45"]["exit_count"] == 1
+    assert coverage["45"]["matched_count"] == 0
+    assert coverage["50"]["entrant_count"] == 1
+    assert coverage["50"]["matched_count"] == 0
+    assert coverage["50"]["matched_coverage"] == 0.0
+
+
+def test_model_composition_change_is_evaluated_within_each_horizon():
+    company_panel = pd.DataFrame(
+        [
+            {
+                "Code": "A",
+                "FY": "FY1",
+                "CQBtw": 1,
+                "top_sector": "45",
+                "old_EPS_Est": 10.0,
+                "new_EPS_Est": 10.1,
+                "old_model": "legacy",
+                "new_model": "modern",
+            },
+            {
+                "Code": "B",
+                "FY": "FY2",
+                "CQBtw": 2,
+                "top_sector": "45",
+                "old_EPS_Est": 10.0,
+                "new_EPS_Est": 10.1,
+                "old_model": "modern",
+                "new_model": "legacy",
+            },
+        ]
+    )
+
+    result = build_sector_features(company_panel, pd.DataFrame())[0]
+
+    assert result["quality_flags"]["model_composition_change"] is True
+
+
+def test_quality_gate_constants_are_named_and_match_the_research_policy():
+    assert features.MIN_MATCHED_COVERAGE == 0.50
+    assert features.MIN_MATCHED_COMPANIES == 10
+    assert features.MIN_FLAGGED_FORWARD_HORIZONS == 2

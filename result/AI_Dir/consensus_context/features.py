@@ -19,6 +19,16 @@ _COVERAGE_FIELDS = (
     "matched_coverage",
 )
 
+# Conservative initial quality-gate thresholds from the research specification.
+MIN_MATCHED_COVERAGE = 0.50
+"""Minimum matched/new company ratio required for a forward horizon."""
+
+MIN_MATCHED_COMPANIES = 10
+"""Minimum matched-company count required for a forward horizon."""
+
+MIN_FLAGGED_FORWARD_HORIZONS = 2
+"""Number of the three forward horizons needed to trip a repeated-condition gate."""
+
 
 def _finite(value: object) -> float | None:
     try:
@@ -159,6 +169,19 @@ def _coverage_from_attrs(
     return None
 
 
+def _coverage_sector_values(*panels: pd.DataFrame) -> list[str]:
+    values: list[str] = []
+    for panel in panels:
+        for record in panel.attrs.get("coverage", []):
+            value = record.get("top_sector")
+            if value is None or pd.isna(value):
+                continue
+            text = str(value).strip()
+            if text:
+                values.append(text[:2])
+    return values
+
+
 def _coverage(
     original_panel: pd.DataFrame,
     rows: pd.DataFrame,
@@ -199,13 +222,34 @@ def _model_composition_changed(rows: pd.DataFrame) -> bool:
     new_column = _paired_column(rows, "new", "model")
     if old_column is None or new_column is None or rows.empty:
         return False
-    old_mix = rows[old_column].astype("string").fillna("<missing>").value_counts(normalize=True)
-    new_mix = rows[new_column].astype("string").fillna("<missing>").value_counts(normalize=True)
-    labels = old_mix.index.union(new_mix.index)
-    return any(
-        not math.isclose(float(old_mix.get(label, 0.0)), float(new_mix.get(label, 0.0)))
-        for label in labels
+
+    groups = (
+        (group for _, group in rows.groupby("_horizon", dropna=False))
+        if "_horizon" in rows
+        else (rows,)
     )
+    for group in groups:
+        old_mix = (
+            group[old_column]
+            .astype("string")
+            .fillna("<missing>")
+            .value_counts(normalize=True)
+        )
+        new_mix = (
+            group[new_column]
+            .astype("string")
+            .fillna("<missing>")
+            .value_counts(normalize=True)
+        )
+        labels = old_mix.index.union(new_mix.index)
+        if any(
+            not math.isclose(
+                float(old_mix.get(label, 0.0)), float(new_mix.get(label, 0.0))
+            )
+            for label in labels
+        ):
+            return True
+    return False
 
 
 def _company_growth(rows: pd.DataFrame) -> dict[str, float | None]:
@@ -282,7 +326,10 @@ def build_sector_features(
 
     company_sector_values = companies["_top_sector"].dropna().astype(str).tolist()
     aggregate_sector_values = sectors["_top_sector"].dropna().astype(str).tolist()
-    sector_names = sorted(set(company_sector_values + aggregate_sector_values))
+    coverage_sector_values = _coverage_sector_values(company_panel, sector_panel)
+    sector_names = sorted(
+        set(company_sector_values + aggregate_sector_values + coverage_sector_values)
+    )
     results: list[dict] = []
 
     company_old_eps = _paired_column(companies, "old", "EPS_Est")
@@ -324,14 +371,13 @@ def build_sector_features(
 
             old_total = None
             new_total = None
-            if aggregate_old is not None:
+            if aggregate_old is not None and aggregate_new is not None:
                 old_values = pd.to_numeric(aggregate_rows[aggregate_old], errors="coerce")
-                old_values = old_values[np.isfinite(old_values)]
-                old_total = float(old_values.sum()) if not old_values.empty else None
-            if aggregate_new is not None:
                 new_values = pd.to_numeric(aggregate_rows[aggregate_new], errors="coerce")
-                new_values = new_values[np.isfinite(new_values)]
-                new_total = float(new_values.sum()) if not new_values.empty else None
+                paired = np.isfinite(old_values) & np.isfinite(new_values)
+                if paired.any():
+                    old_total = float(old_values.loc[paired].sum())
+                    new_total = float(new_values.loc[paired].sum())
             revisions[horizon], instability[horizon] = stable_revision(old_total, new_total)
 
             old_growth = _mean(aggregate_rows, growth_old)
@@ -364,10 +410,12 @@ def build_sector_features(
         growth_component = _combine_available(growth_level, growth_change)
 
         low_coverage_horizons = sum(
-            coverage[horizon]["matched_coverage"] < 0.50 for horizon in range(1, 4)
+            coverage[horizon]["matched_coverage"] < MIN_MATCHED_COVERAGE
+            for horizon in range(1, 4)
         )
         low_count_horizons = sum(
-            coverage[horizon]["matched_count"] < 10 for horizon in range(1, 4)
+            coverage[horizon]["matched_count"] < MIN_MATCHED_COMPANIES
+            for horizon in range(1, 4)
         )
         conflict_horizons = sum(
             revisions[horizon] is not None
@@ -377,10 +425,15 @@ def build_sector_features(
         )
         quality_flags = {
             "insufficient_coverage": (
-                low_coverage_horizons >= 2 or low_count_horizons >= 2
+                low_coverage_horizons >= MIN_FLAGGED_FORWARD_HORIZONS
+                or low_count_horizons >= MIN_FLAGGED_FORWARD_HORIZONS
             ),
-            "insufficient_matched_companies": low_count_horizons >= 2,
-            "aggregate_median_conflict": conflict_horizons >= 2,
+            "insufficient_matched_companies": (
+                low_count_horizons >= MIN_FLAGGED_FORWARD_HORIZONS
+            ),
+            "aggregate_median_conflict": (
+                conflict_horizons >= MIN_FLAGGED_FORWARD_HORIZONS
+            ),
             "denominator_instability": any(instability.values()),
             "model_composition_change": _model_composition_changed(company_sector),
         }

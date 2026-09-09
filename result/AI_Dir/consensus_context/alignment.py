@@ -50,13 +50,27 @@ def _coverage_table(
         _counts(new, dimensions, "new_count"),
     ]
 
-    status_inputs = (
-        ("both", "new__coverage_sector", "matched_count"),
-        ("right_only", "new__coverage_sector", "entrant_count"),
-        ("left_only", "old__coverage_sector", "exit_count"),
+    matched = merged["_merge"].eq("both")
+    same_sector = merged["old__coverage_sector"].eq(merged["new__coverage_sector"])
+    same_sector |= (
+        merged["old__coverage_sector"].isna()
+        & merged["new__coverage_sector"].isna()
     )
-    for status, sector_column, count_name in status_inputs:
-        selected = merged.loc[merged["_merge"].eq(status), [sector_column, "FY", "CQBtw"]]
+    status_inputs = (
+        (matched & same_sector, "new__coverage_sector", "matched_count"),
+        (
+            merged["_merge"].eq("right_only") | (matched & ~same_sector),
+            "new__coverage_sector",
+            "entrant_count",
+        ),
+        (
+            merged["_merge"].eq("left_only") | (matched & ~same_sector),
+            "old__coverage_sector",
+            "exit_count",
+        ),
+    )
+    for mask, sector_column, count_name in status_inputs:
+        selected = merged.loc[mask, [sector_column, "FY", "CQBtw"]]
         selected = selected.rename(columns={sector_column: "_coverage_sector"})
         tables.append(_counts(selected, dimensions, count_name))
 
