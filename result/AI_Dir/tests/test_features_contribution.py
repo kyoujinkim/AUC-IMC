@@ -6,6 +6,10 @@ from consensus_context.alignment import (
     align_company_snapshots,
     align_sector_snapshots,
 )
+from consensus_context.contribution import (
+    attribute_contributors,
+    truncate_contributors,
+)
 from consensus_context.features import (
     build_sector_features,
     revision_breadth,
@@ -333,3 +337,174 @@ def test_quality_gate_constants_are_named_and_match_the_research_policy():
     assert features.MIN_MATCHED_COVERAGE == 0.50
     assert features.MIN_MATCHED_COMPANIES == 10
     assert features.MIN_FLAGGED_FORWARD_HORIZONS == 2
+
+
+def test_truncation_keeps_both_tails_and_discloses_omissions():
+    rows = [{"id": str(i), "contribution": float(i - 15)} for i in range(31)]
+
+    result = truncate_contributors(rows, top_n=10)
+
+    assert len(result["positive"]) == 10
+    assert len(result["negative"]) == 10
+    assert result["omitted_count"] == 11
+    assert result["all_contributors_total"] == sum(
+        row["contribution"] for row in rows
+    )
+    assert result["omitted_signed_total"] == pytest.approx(0.0)
+    assert result["gross_total"] == pytest.approx(240.0)
+    assert result["total_count"] == 31
+
+
+def test_truncation_uses_entity_id_as_the_stable_tie_break():
+    rows = [
+        {"id": "B", "contribution": 3.0},
+        {"id": "A", "contribution": 3.0},
+        {"id": "D", "contribution": -2.0},
+        {"id": "C", "contribution": -2.0},
+    ]
+
+    result = truncate_contributors(rows, top_n=2)
+
+    assert [row["id"] for row in result["positive"]] == ["A", "B"]
+    assert [row["id"] for row in result["negative"]] == ["C", "D"]
+
+
+def test_attribution_uses_prior_shares_and_preserves_identity_and_horizon():
+    panel = pd.DataFrame(
+        [
+            {
+                "Code": "A",
+                "FY": "2027Q1",
+                "CQBtw": 1,
+                "top_sector": "45",
+                "new_Sector": "4510",
+                "new_name": "Alpha",
+                "old_EPS_Est": 2.0,
+                "new_EPS_Est": 2.5,
+                "old_shares": 100.0,
+                "new_shares": 1_000.0,
+            }
+        ]
+    )
+
+    result = attribute_contributors(panel)
+    horizon = result["45"][1]
+    company = horizon["companies"]["positive"][0]
+
+    assert company == {
+        "id": "A",
+        "name": "Alpha",
+        "sector": "45",
+        "industry": "4510",
+        "horizon": 1,
+        "fy": "2027Q1",
+        "contribution": pytest.approx(50.0),
+        "absolute_contribution_share": pytest.approx(1.0),
+    }
+    assert horizon["all_contributors_total"] == pytest.approx(50.0)
+
+
+def test_attribution_excludes_non_finite_inputs_and_surfaces_the_count():
+    panel = pd.DataFrame(
+        [
+            {
+                "Code": code,
+                "FY": "FY1",
+                "CQBtw": 1,
+                "top_sector": "45",
+                "new_Sector": "4510",
+                "old_EPS_Est": old_eps,
+                "new_EPS_Est": new_eps,
+                "old_shares": old_shares,
+            }
+            for code, old_eps, new_eps, old_shares in (
+                ("valid", 1.0, 2.0, 10.0),
+                ("old-eps", float("nan"), 2.0, 10.0),
+                ("new-eps", 1.0, float("inf"), 10.0),
+                ("shares", 1.0, 2.0, float("nan")),
+            )
+        ]
+    )
+
+    horizon = attribute_contributors(panel)["45"][1]
+
+    assert horizon["excluded_count"] == 3
+    assert horizon["total_count"] == 1
+    assert horizon["all_contributors_total"] == pytest.approx(10.0)
+
+
+def test_attribution_aggregates_industries_and_companies_with_gross_shares():
+    panel = pd.DataFrame(
+        [
+            {
+                "Code": code,
+                "FY": "FY2",
+                "CQBtw": 2,
+                "top_sector": "45",
+                "new_Sector": industry,
+                "old_EPS_Est": 10.0,
+                "new_EPS_Est": 10.0 + contribution,
+                "old_shares": 1.0,
+            }
+            for code, industry, contribution in (
+                ("A", "4510", 4.0),
+                ("B", "4510", -1.0),
+                ("C", "4520", -2.0),
+            )
+        ]
+    )
+
+    horizon = attribute_contributors(panel)["45"][2]
+    industries = {
+        row["id"]: row
+        for tail in ("positive", "negative")
+        for row in horizon["industries"][tail]
+    }
+    companies = {
+        row["id"]: row
+        for tail in ("positive", "negative")
+        for row in horizon["companies"][tail]
+    }
+
+    assert horizon["all_contributors_total"] == pytest.approx(1.0)
+    assert horizon["gross_total"] == pytest.approx(7.0)
+    assert companies["A"]["absolute_contribution_share"] == pytest.approx(4 / 7)
+    assert industries["4510"]["contribution"] == pytest.approx(3.0)
+    assert industries["4510"]["absolute_contribution_share"] == pytest.approx(3 / 7)
+    assert industries["4520"]["contribution"] == pytest.approx(-2.0)
+
+
+def test_attribution_calculates_concentration_and_reconciliation():
+    panel = pd.DataFrame(
+        [
+            {
+                "Code": code,
+                "FY": "FY1",
+                "CQBtw": 1,
+                "top_sector": "45",
+                "new_Sector": "4510",
+                "old_EPS_Est": 10.0,
+                "new_EPS_Est": 10.0 + contribution,
+                "old_shares": 1.0,
+                "old_earning_total": 100.0,
+                "new_earning_total": 112.0,
+            }
+            for code, contribution in (
+                ("A", 4.0),
+                ("B", 3.0),
+                ("C", -2.0),
+                ("D", 1.0),
+                ("E", -1.0),
+                ("F", 1.0),
+            )
+        ]
+    )
+
+    horizon = attribute_contributors(panel)["45"][1]
+
+    assert horizon["top_three_gross_share"] == pytest.approx(9 / 12)
+    assert horizon["top_five_gross_share"] == pytest.approx(11 / 12)
+    assert horizon["contribution_hhi"] == pytest.approx(32 / 144)
+    assert horizon["supplied_earning_total_change"] == pytest.approx(12.0)
+    assert horizon["bottom_up_total"] == pytest.approx(6.0)
+    assert horizon["reconciliation_residual"] == pytest.approx(6.0)
