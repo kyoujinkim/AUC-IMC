@@ -1,5 +1,7 @@
 # Consensus Investment Report Skill Implementation Plan
 
+> **Superseded on 2026-09-09:** This plan assumes a deterministic direction selector and report engine. Retain it as design history only. Execute `docs/superpowers/plans/2026-09-09-consensus-llm-research-skill-implementation.md` after the JSON context-builder plan passes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create, evaluate, refine, and package a reusable `consensus-investment-report` skill that operates the verified report engine and enforces the approved evidence and missing-data policies.

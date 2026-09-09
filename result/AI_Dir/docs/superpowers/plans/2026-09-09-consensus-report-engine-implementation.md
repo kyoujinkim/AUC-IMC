@@ -1,5 +1,7 @@
 # Consensus Report Engine Implementation Plan
 
+> **Superseded on 2026-09-09:** This deterministic end-to-end engine plan is retained as design history. Do not execute it. Use `docs/superpowers/plans/2026-09-09-consensus-json-context-builder-implementation.md`, which implements the approved thin data layer and LLM-native analysis boundary.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a deterministic Python pipeline that turns point-in-time estimate snapshots and verified evidence into a 1–3 month U.S. sector Long/Short research report without portfolio weights.
