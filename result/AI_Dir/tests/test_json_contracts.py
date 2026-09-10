@@ -18,6 +18,25 @@ from consensus_context.serialization import write_pretty_json
 
 
 SCHEMA_DIR = Path(__file__).parents[1] / "schemas"
+FORBIDDEN_RESEARCH_VARIANTS = [
+    "drivers_detail",
+    "DRIVER_DETAIL",
+    "DRIVERS_DETAIL",
+    "RISK_DETAIL",
+    "RISKS_DETAIL",
+    "RECOMMENDATION_DETAIL",
+    "RECOMMENDATIONS_DETAIL",
+    "RATING_DETAIL",
+    "RATINGS_DETAIL",
+    "DECISION_DETAIL",
+    "DECISIONS_DETAIL",
+    "DIRECTION_DETAIL",
+    "DIRECTIONS_DETAIL",
+    "CAUSE_DETAIL",
+    "CAUSES_DETAIL",
+    "INVALIDATION_DETAIL",
+    "INVALIDATIONS_DETAIL",
+]
 
 
 def _schema(name):
@@ -226,6 +245,39 @@ def test_research_schema_rejects_nested_judgment_fields(
     assert errors, f"schema accepted nested forbidden field {forbidden!r}"
 
 
+@pytest.mark.parametrize("forbidden", FORBIDDEN_RESEARCH_VARIANTS)
+def test_research_context_rejects_case_insensitive_singular_plural_variants(
+    forbidden,
+):
+    with pytest.raises(ValueError, match=forbidden):
+        build_research_context(
+            run_id="run-1",
+            generated_at="2026-09-08T12:30:00Z",
+            old_date="2026-07-31",
+            new_date="2026-09-08",
+            provenance=[],
+            methodology={"outer": {"inner": {forbidden: "not a fact"}}},
+            sectors=[],
+            validation_summary={},
+        )
+
+
+@pytest.mark.parametrize("forbidden", FORBIDDEN_RESEARCH_VARIANTS)
+def test_research_schema_rejects_case_insensitive_singular_plural_variants(
+    valid_research, forbidden
+):
+    research = deepcopy(valid_research)
+    research["methodology"] = {"outer": {"inner": {forbidden: "not a fact"}}}
+
+    errors = list(
+        Draft202012Validator(_schema("research-context.schema.json")).iter_errors(
+            research
+        )
+    )
+
+    assert errors, f"schema accepted nested forbidden field {forbidden!r}"
+
+
 def test_research_context_rejects_non_iso_snapshot_dates():
     with pytest.raises(ValueError, match="snapshot_dates"):
         build_research_context(
@@ -290,6 +342,38 @@ def test_research_context_rejects_nonfinite_decimals_during_normalization(value)
             new_date="2026-09-08",
             provenance=[],
             methodology={"threshold": value},
+            sectors=[],
+            validation_summary={},
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [Decimal("1e-10000"), Decimal("0.12345678901234567890123456789")],
+)
+def test_research_context_rejects_decimal_that_cannot_round_trip_without_loss(value):
+    with pytest.raises(ValueError, match="without loss"):
+        build_research_context(
+            run_id="run-1",
+            generated_at="2026-09-08T12:30:00Z",
+            old_date="2026-07-31",
+            new_date="2026-09-08",
+            provenance=[],
+            methodology={"threshold": value},
+            sectors=[],
+            validation_summary={},
+        )
+
+
+def test_research_context_rejects_decimal_beyond_json_integer_limit():
+    with pytest.raises(ValueError, match="JSON-safe"):
+        build_research_context(
+            run_id="run-1",
+            generated_at="2026-09-08T12:30:00Z",
+            old_date="2026-07-31",
+            new_date="2026-09-08",
+            provenance=[],
+            methodology={"threshold": Decimal("1e10000")},
             sectors=[],
             validation_summary={},
         )

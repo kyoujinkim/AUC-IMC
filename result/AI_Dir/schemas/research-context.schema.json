@@ -61,7 +61,7 @@
       "type": "object",
       "propertyNames": {
         "not": {
-          "pattern": "^(?:risk(?:s|_.*)?|invalidation(?:s|_.*)?|recommendation(?:s|_.*)?|stance(?:s|_.*)?|rating(?:s|_.*)?|decision(?:s|_.*)?|direction(?:s|_.*)?|long|long_sectors|short|short_sectors|watch|watch_sectors|driver(?:s|_.*)?|causal.*|cause(?:s|_.*)?)$"
+          "pattern": "^(?:(?:[Rr][Ii][Ss][Kk][Ss]?|[Ii][Nn][Vv][Aa][Ll][Ii][Dd][Aa][Tt][Ii][Oo][Nn][Ss]?|[Rr][Ee][Cc][Oo][Mm][Mm][Ee][Nn][Dd][Aa][Tt][Ii][Oo][Nn][Ss]?|[Ss][Tt][Aa][Nn][Cc][Ee][Ss]?|[Rr][Aa][Tt][Ii][Nn][Gg][Ss]?|[Dd][Ee][Cc][Ii][Ss][Ii][Oo][Nn][Ss]?|[Dd][Ii][Rr][Ee][Cc][Tt][Ii][Oo][Nn][Ss]?|[Dd][Rr][Ii][Vv][Ee][Rr][Ss]?|[Cc][Aa][Uu][Ss][Ee][Ss]?)(?:_.*)?|[Cc][Aa][Uu][Ss][Aa][Ll].*|[Ll][Oo][Nn][Gg](?:_[Ss][Ee][Cc][Tt][Oo][Rr][Ss])?|[Ss][Hh][Oo][Rr][Tt](?:_[Ss][Ee][Cc][Tt][Oo][Rr][Ss])?|[Ww][Aa][Tt][Cc][Hh](?:_[Ss][Ee][Cc][Tt][Oo][Rr][Ss])?|[Tt][Hh][Ee][Ss][Ii][Ss]|[Ii][Mm][Pp][Aa][Cc][Tt]|[Ee][Vv][Ii][Dd][Ee][Nn][Cc][Ee]_[Ll][Ee][Dd][Gg][Ee][Rr]|[Dd][Aa][Tt][Aa]_[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]|[Uu][Ss][Ee][Rr]_[Oo][Vv][Ee][Rr][Rr][Ii][Dd][Ee][Ss]?)$"
         }
       },
       "additionalProperties": {"$ref": "#/$defs/factValue"}

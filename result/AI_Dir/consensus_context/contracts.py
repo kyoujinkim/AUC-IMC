@@ -59,6 +59,26 @@ _FORBIDDEN_RESEARCH_FIELDS = {
     "user_override",
     "user_overrides",
 }
+_FORBIDDEN_RESEARCH_PREFIXES = (
+    "cause",
+    "causes",
+    "decision",
+    "decisions",
+    "direction",
+    "directions",
+    "driver",
+    "drivers",
+    "invalidation",
+    "invalidations",
+    "rating",
+    "ratings",
+    "recommendation",
+    "recommendations",
+    "risk",
+    "risks",
+    "stance",
+    "stances",
+)
 _FORBIDDEN_SIZING_FIELDS = {"weight", "allocation", "position_size", "leverage"}
 
 
@@ -92,10 +112,21 @@ def _json_value(value: Any) -> Any:
         if not value.is_finite():
             raise ValueError(f"non-finite Decimal is not valid JSON: {value!r}")
         if value == value.to_integral_value():
-            return int(value)
+            converted_integer = int(value)
+            try:
+                json.dumps(converted_integer)
+            except (OverflowError, ValueError) as exc:
+                raise ValueError(
+                    f"Decimal has no JSON-safe integer representation: {value!r}"
+                ) from exc
+            return converted_integer
         converted = float(value)
         if not math.isfinite(converted):
             raise ValueError(f"Decimal is outside the finite JSON number range: {value!r}")
+        if Decimal(str(converted)) != value:
+            raise ValueError(
+                f"Decimal cannot be represented as a JSON number without loss: {value!r}"
+            )
         return converted
     if isinstance(value, Mapping):
         return {str(key): _json_value(item) for key, item in value.items()}
@@ -142,21 +173,13 @@ def _nonfinite_paths(value: object, path: str = ""):
 def _reject_research_judgments(value: object) -> None:
     for field, path in _walk_fields(value):
         normalized = field.casefold().replace("-", "_").replace(" ", "_")
-        forbidden_prefixes = (
-            "cause",
-            "decision",
-            "direction",
-            "driver",
-            "invalidation",
-            "rating",
-            "recommendation",
-            "risk",
-            "stance",
-        )
         if (
             normalized in _FORBIDDEN_RESEARCH_FIELDS
             or normalized.startswith("causal")
-            or any(normalized.startswith(f"{prefix}_") for prefix in forbidden_prefixes)
+            or any(
+                normalized.startswith(f"{prefix}_")
+                for prefix in _FORBIDDEN_RESEARCH_PREFIXES
+            )
         ):
             raise ValueError(f"research context contains forbidden field {field!r} at {path}")
 
