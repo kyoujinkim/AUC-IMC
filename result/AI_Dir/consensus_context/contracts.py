@@ -26,19 +26,34 @@ _ANALYSIS_COLLECTIONS = (
     "watch_sectors",
 )
 _FORBIDDEN_RESEARCH_FIELDS = {
+    "cause",
+    "causes",
     "decision",
     "decisions",
     "direction",
+    "directions",
     "driver",
     "drivers",
+    "invalidation",
+    "invalidations",
+    "invalidation_condition",
     "long",
     "long_sectors",
+    "rating",
+    "ratings",
+    "recommendation",
+    "recommendations",
+    "risk",
+    "risks",
     "short",
     "short_sectors",
+    "stance",
+    "stances",
     "thesis",
     "impact",
-    "risks",
     "invalidation_conditions",
+    "watch",
+    "watch_sectors",
     "evidence_ledger",
     "data_requests",
     "user_override",
@@ -73,6 +88,15 @@ def _json_value(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, Path):
         return value.as_posix()
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError(f"non-finite Decimal is not valid JSON: {value!r}")
+        if value == value.to_integral_value():
+            return int(value)
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise ValueError(f"Decimal is outside the finite JSON number range: {value!r}")
+        return converted
     if isinstance(value, Mapping):
         return {str(key): _json_value(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -117,8 +141,23 @@ def _nonfinite_paths(value: object, path: str = ""):
 
 def _reject_research_judgments(value: object) -> None:
     for field, path in _walk_fields(value):
-        normalized = field.casefold()
-        if normalized in _FORBIDDEN_RESEARCH_FIELDS or normalized.startswith("causal"):
+        normalized = field.casefold().replace("-", "_").replace(" ", "_")
+        forbidden_prefixes = (
+            "cause",
+            "decision",
+            "direction",
+            "driver",
+            "invalidation",
+            "rating",
+            "recommendation",
+            "risk",
+            "stance",
+        )
+        if (
+            normalized in _FORBIDDEN_RESEARCH_FIELDS
+            or normalized.startswith("causal")
+            or any(normalized.startswith(f"{prefix}_") for prefix in forbidden_prefixes)
+        ):
             raise ValueError(f"research context contains forbidden field {field!r} at {path}")
 
 
@@ -236,7 +275,7 @@ def _is_number(value: object) -> bool:
 
 def _numbers_match(copied: object, canonical: object, tolerance: object) -> bool:
     if not (_is_number(copied) and _is_number(canonical)):
-        return copied == canonical and type(copied) is type(canonical)
+        return False
     try:
         copied_decimal = Decimal(str(copied))
         canonical_decimal = Decimal(str(canonical))
@@ -348,11 +387,18 @@ def validate_analysis_result(result: dict, research: dict) -> list[str]:
                     f"{support_location}/research_json_path: cannot resolve {pointer!r}: {exc}"
                 )
                 continue
+            copied = support.get("value")
+            if not (_is_number(copied) and _is_number(canonical)):
+                errors.append(
+                    f"{support_location}/research_json_path: non-numeric quantitative "
+                    f"support value or canonical value at {pointer!r}"
+                )
+                continue
             if not _numbers_match(
-                support.get("value"), canonical, support.get("numeric_tolerance")
+                copied, canonical, support.get("numeric_tolerance")
             ):
                 errors.append(
-                    f"{support_location}/research_json_path: copied value {support.get('value')!r} "
+                    f"{support_location}/research_json_path: copied value {copied!r} "
                     f"does not match canonical value {canonical!r} at {pointer!r}"
                 )
 

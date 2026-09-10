@@ -2,6 +2,7 @@ import json
 import math
 from copy import deepcopy
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,78 @@ def test_research_context_rejects_decision_and_causal_fields(forbidden):
         )
 
 
+@pytest.mark.parametrize(
+    ("container", "forbidden"),
+    [
+        ("methodology", "risk"),
+        ("methodology", "invalidation"),
+        ("methodology", "Recommendation"),
+        ("methodology", "stance"),
+        ("market", "rating"),
+        ("market", "decision"),
+        ("market", "direction"),
+        ("market", "watch"),
+        ("sector", "long"),
+        ("sector", "short"),
+        ("sector", "drivers"),
+        ("sector", "causal_claims"),
+    ],
+)
+def test_research_context_recursively_rejects_judgment_fields(
+    container, forbidden
+):
+    methodology = {}
+    market = None
+    sectors = [{"sector": "45", "signals": {}}]
+    nested = {"level_one": {"level_two": {forbidden: "not a fact"}}}
+    if container == "methodology":
+        methodology = nested
+    elif container == "market":
+        market = nested
+    else:
+        sectors[0]["signals"] = nested
+
+    with pytest.raises(ValueError, match=forbidden):
+        build_research_context(
+            run_id="run-1",
+            generated_at="2026-09-08T12:30:00Z",
+            old_date="2026-07-31",
+            new_date="2026-09-08",
+            provenance=[],
+            methodology=methodology,
+            market=market,
+            sectors=sectors,
+            validation_summary={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("container", "forbidden"),
+    [
+        ("methodology", "recommendation"),
+        ("market", "risk"),
+        ("sector", "causal_claim"),
+    ],
+)
+def test_research_schema_rejects_nested_judgment_fields(
+    valid_research, container, forbidden
+):
+    research = deepcopy(valid_research)
+    nested = {"safe_fact": {forbidden: "must not bypass the builder"}}
+    if container == "sector":
+        research["sectors"][0]["signals"] = nested
+    else:
+        research[container] = nested
+
+    errors = list(
+        Draft202012Validator(_schema("research-context.schema.json")).iter_errors(
+            research
+        )
+    )
+
+    assert errors, f"schema accepted nested forbidden field {forbidden!r}"
+
+
 def test_research_context_rejects_non_iso_snapshot_dates():
     with pytest.raises(ValueError, match="snapshot_dates"):
         build_research_context(
@@ -177,6 +250,47 @@ def test_research_context_rejects_nested_nonfinite_values():
             provenance=[],
             methodology={},
             sectors=[{"sector": "45", "signals": {"forward_revision": math.inf}}],
+            validation_summary={},
+        )
+
+
+def test_research_context_normalizes_decimal_before_serialization(tmp_path):
+    research = build_research_context(
+        run_id="run-1",
+        generated_at="2026-09-08T12:30:00Z",
+        old_date="2026-07-31",
+        new_date="2026-09-08",
+        provenance=[],
+        methodology={"revision_threshold": Decimal("0.05")},
+        sectors=[
+            {
+                "sector": "45",
+                "signals": {"forward_revision": Decimal("0.125")},
+            }
+        ],
+        validation_summary={},
+    )
+    path = tmp_path / "research.json"
+
+    write_pretty_json(path, research)
+
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    assert loaded["methodology"]["revision_threshold"] == 0.05
+    assert loaded["sectors"][0]["signals"]["forward_revision"] == 0.125
+    assert isinstance(loaded["sectors"][0]["signals"]["forward_revision"], float)
+
+
+@pytest.mark.parametrize("value", [Decimal("NaN"), Decimal("Infinity")])
+def test_research_context_rejects_nonfinite_decimals_during_normalization(value):
+    with pytest.raises(ValueError, match="non-finite Decimal"):
+        build_research_context(
+            run_id="run-1",
+            generated_at="2026-09-08T12:30:00Z",
+            old_date="2026-07-31",
+            new_date="2026-09-08",
+            provenance=[],
+            methodology={"threshold": value},
+            sectors=[],
             validation_summary={},
         )
 
@@ -235,6 +349,25 @@ def test_analysis_allows_an_explicit_numeric_tolerance(valid_analysis, valid_res
     support["numeric_tolerance"] = 0.001
 
     assert validate_analysis_result(valid_analysis, valid_research) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("label", "improving"), ("flag", True), ("missing", None)],
+)
+def test_quantitative_support_rejects_nonnumeric_values_and_paths(
+    valid_analysis, valid_research, field, value
+):
+    valid_research["sectors"][0]["signals"][field] = value
+    support = valid_analysis["long_sectors"][0]["quantitative_support"][0]
+    support["metric"] = field
+    support["value"] = value
+    support["research_json_path"] = f"/sectors/0/signals/{field}"
+
+    errors = validate_analysis_result(valid_analysis, valid_research)
+
+    assert any("non-numeric" in error for error in errors)
+    assert any("/value" in error for error in errors)
 
 
 def test_analysis_rejects_unknown_evidence_and_missing_risk_contracts(

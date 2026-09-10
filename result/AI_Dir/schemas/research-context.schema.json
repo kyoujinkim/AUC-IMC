@@ -41,15 +41,31 @@
         "additionalProperties": false
       }
     },
-    "methodology": {"type": "object"},
-    "market": {"type": "object"},
+    "methodology": {"$ref": "#/$defs/factObject"},
+    "market": {"$ref": "#/$defs/factObject"},
     "sectors": {
       "type": "array",
       "items": {"$ref": "#/$defs/sector"}
     },
-    "validation_summary": {"type": "object"}
+    "validation_summary": {"$ref": "#/$defs/factObject"}
   },
   "$defs": {
+    "factValue": {
+      "anyOf": [
+        {"type": ["string", "number", "boolean", "null"]},
+        {"type": "array", "items": {"$ref": "#/$defs/factValue"}},
+        {"$ref": "#/$defs/factObject"}
+      ]
+    },
+    "factObject": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "^(?:risk(?:s|_.*)?|invalidation(?:s|_.*)?|recommendation(?:s|_.*)?|stance(?:s|_.*)?|rating(?:s|_.*)?|decision(?:s|_.*)?|direction(?:s|_.*)?|long|long_sectors|short|short_sectors|watch|watch_sectors|driver(?:s|_.*)?|causal.*|cause(?:s|_.*)?)$"
+        }
+      },
+      "additionalProperties": {"$ref": "#/$defs/factValue"}
+    },
     "sector": {
       "type": "object",
       "required": ["sector"],
@@ -57,21 +73,21 @@
       "properties": {
         "sector": {"type": "string", "minLength": 1},
         "sector_name": {"type": "string"},
-        "signals": {"type": "object"},
-        "revisions": {"type": "object"},
+        "signals": {"$ref": "#/$defs/factObject"},
+        "revisions": {"$ref": "#/$defs/factObject"},
         "forward_revision": {"type": ["number", "null"]},
         "revision_slope": {"type": ["number", "null"]},
-        "breadth": {"type": "object"},
-        "company_revision_stats": {"type": "object"},
-        "coverage": {"type": "object"},
-        "growth": {"type": "object"},
-        "denominator_instability_by_horizon": {"type": "object"},
-        "quality_flags": {"type": "object"},
-        "component_values": {"type": "object"},
-        "component_ranks": {"type": "object"},
-        "component_rank_methods": {"type": "object"},
+        "breadth": {"$ref": "#/$defs/factObject"},
+        "company_revision_stats": {"$ref": "#/$defs/factObject"},
+        "coverage": {"$ref": "#/$defs/factObject"},
+        "growth": {"$ref": "#/$defs/factObject"},
+        "denominator_instability_by_horizon": {"$ref": "#/$defs/factObject"},
+        "quality_flags": {"$ref": "#/$defs/factObject"},
+        "component_values": {"$ref": "#/$defs/factObject"},
+        "component_ranks": {"$ref": "#/$defs/factObject"},
+        "component_rank_methods": {"$ref": "#/$defs/factObject"},
         "research_prior": {"type": ["number", "null"]},
-        "contributions": {"type": "object"}
+        "contributions": {"$ref": "#/$defs/factObject"}
       }
     }
   }

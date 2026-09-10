@@ -54,7 +54,7 @@
       "additionalProperties": false,
       "properties": {
         "metric": {"type": "string", "minLength": 1},
-        "value": {"type": ["number", "string", "boolean", "null"]},
+        "value": {"type": "number"},
         "research_json_path": {"type": "string", "pattern": "^/"},
         "numeric_tolerance": {"type": "number", "minimum": 0}
       }
