@@ -11,10 +11,12 @@ from tqdm import tqdm
 
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-from src.funs import build_data, build_gdp_scenario, merged_ts, filter_guided_stock, safe_read_csv
+from src.funs import build_data, build_gdp_scenario, merged_ts, filter_guided_stock, safe_read_csv, \
+    generate_financial_periods
 from src.enh_EPS import Enhanced_EPS
 import warnings
 warnings.filterwarnings('ignore')
+
 
 def get_sector_growth_rate(x, est_name='earning_Est', act_name='earning_1Y', cap_name='earning_1Y_caption'):
     # if col earning_1Y_caption is smaller than 0, **1/2 to growth rate
@@ -133,13 +135,14 @@ def get_shares(x, shares):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--no_calc_est', dest='calc_est', default=True, action='store_false', help='Skip EPS estimation (enabled by default)')
-    parser.add_argument('--no_calc_gdp_effect', dest='calc_gdp_effect', default=True, action='store_false', help='Skip GDP effect calculation (enabled by default)')
-    parser.add_argument('-ru', '--reuse_ucurve', default=True, action='store_true', help='Whether to reuse ucurve coefficients')
-    parser.add_argument('-rc', '--reuse_cache', default=True, action='store_true', help='Whether to reuse cache data')
+    parser.add_argument('--no_calc_curve_effect', dest='calc_curve_effect', default=True, action='store_false', help='Skip GDP effect calculation (enabled by default)')
+    parser.add_argument('-ru', '--reuse_ucurve', default=False, action='store_true', help='Whether to reuse ucurve coefficients')
+    parser.add_argument('-rc', '--reuse_cache', default=False, action='store_true', help='Whether to reuse cache data')
     parser.add_argument('-rr', '--reuse_result', default=False, action='store_true', help='Whether to reuse result data')
     parser.add_argument('-d', '--prddate', default=(dt.datetime.today()).strftime('%Y-%m-%d'), help='Prediction date in YYYY-MM-DD format')
-    parser.add_argument('-s', '--setting', default='US_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
+    parser.add_argument('-s', '--setting', default='KR_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
     parser.add_argument('-qb', '--q-basis', default='CQBtw', choices=['QBtw','CQBtw'], help='Basis for quarterly data')
+    parser.add_argument('-q', '--quarter', default='3Q26AS', help='Quarter for quarterly data(e.g. 2Q26AS)')
 
     return parser.parse_args()
 
@@ -148,17 +151,14 @@ if __name__ == '__main__':
     args = parse_args()
 
     calc_est = args.calc_est
-    calc_gdp_effect = args.calc_gdp_effect
+    calc_curve_effect = args.calc_curve_effect
     reuse_ucurve = args.reuse_ucurve
     reuse_cache = args.reuse_cache
     q_basis = args.q_basis
+    eq_basis = 'CQBtw' if q_basis == 'CQBtw' else 'EQBtw'
     reuse_result = args.reuse_result
-
-    #prddate as today
-    prddate = args.prddate
-    #prddate = (dt.datetime.today() - dt.timedelta(days=30)).strftime('%Y-%m-%d')
-    #prddate = dt.datetime.today().strftime('%Y-%m-%d') - dt.timedelta(days=30)
     setting = args.setting  # 'US_Q' 'US_Y' 'KR_Q' 'KR_Y'
+    prddate = args.prddate
 
     if 'KR' in setting:
         country = 'kr'
@@ -171,33 +171,14 @@ if __name__ == '__main__':
         model_name = 'mixed_model'
     else:
         period = 'Q'
-        prdFY = ['2Q26AS', '3Q26AS', '4Q26AS', '1Q27AS']
-        # curveFY should include previous 3 years for quarterly data
-        curveFY = ['2Q23AS', '3Q23AS', '4Q23AS',
-                   '1Q24AS', '2Q24AS', '3Q24AS', '4Q24AS',
-                   '1Q25AS', '2Q25AS', '3Q25AS', '4Q25AS',
-                   '1Q26AS',] + prdFY
+        prdFY, curveFY = generate_financial_periods(args.quarter)
         model_name = 'mixed_model'
 
     if country == 'us':
-        use_gdp = False
-        gdp_path = None
-        use_custom_gdp = False
-        gdp_header = None
-        gdp_lag = None
-        rolling = None
-        use_prd = False
         ts_length = 10
         sector_len = 2
         sector_groupby_len = 6
     elif country == 'kr':
-        use_gdp = False
-        gdp_path = None
-        use_custom_gdp = False
-        gdp_header = None
-        gdp_lag = None
-        rolling = None
-        use_prd = False
         ts_length = 10
         sector_len = 3
         sector_groupby_len = 7
@@ -212,14 +193,10 @@ if __name__ == '__main__':
     else:
         train = build_data(f'data/{country}/consenlist/*.csv'
                            , period=period
-                           , use_gdp=use_gdp
-                           , gdp_path=gdp_path
-                           , gdp_header=gdp_header
-                           , gdp_lag=gdp_lag
-                           , rolling=rolling
                            , ts_length=ts_length
                            , sector_len=sector_len
-                           , country=country)
+                           , country=country
+                           , prddate=prddate)
 
     with pd.ExcelFile(f'data/{country}/infos.xlsx') as xls:
         sector_name = pd.read_excel(xls, sheet_name='industry_map', dtype=str).set_index('Code')
@@ -229,15 +206,7 @@ if __name__ == '__main__':
     shares.columns = [code.split('(')[0] for code in shares.columns]
 
     new_train = train[train.A_EPS_1.abs() / train.BPS < 10]
-    if country == 'us':
-        # if previous year's error is less than 0.5%, remove the stock from the list
-        # retain only guidance given stock
-        if period == 'Y':
-            new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
-            new_train = new_train[new_train.Guidance == 1]
-    else:
-        # if previous year's error is less than 0.5%, remove the stock from the list
-        new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
+    new_train = filter_guided_stock(new_train, 'Code', 'Error', 0.001)
 
     UniqueSymbol_model = new_train[new_train.FY.isin(prdFY)].UniqueSymbol.unique()
     UniqueSymbol_EW = train[train.FY.isin(prdFY)][~train.UniqueSymbol.isin(UniqueSymbol_model)].UniqueSymbol.unique()
@@ -281,12 +250,12 @@ if __name__ == '__main__':
 
         # 만약 Code별로 없는 EQBtw가 있다면, 이전 EQBtw값으로 EQBtw 추가
         result_tmp = []
-        for fy, result_fy in tqdm(result.groupby('FY'), desc=f'Adding {q_basis} by FY'):
-            all_eqbtw = np.sort(result_fy.EQBtw.unique())  # ascending
+        for fy, result_fy in tqdm(result.groupby('FY'), desc=f'Adding {eq_basis} by FY'):
+            all_eqbtw = np.sort(result_fy[eq_basis].unique())  # ascending
             all_codes = result_fy.Code.unique()
 
-            result_fy_dedup = result_fy.groupby(['Code', 'EQBtw'], sort=False).last()
-            full_mi = pd.MultiIndex.from_product([all_codes, all_eqbtw], names=['Code', 'EQBtw'])
+            result_fy_dedup = result_fy.groupby(['Code', eq_basis], sort=False).last()
+            full_mi = pd.MultiIndex.from_product([all_codes, all_eqbtw], names=['Code', eq_basis])
             result_fy_full = result_fy_dedup.reindex(full_mi)
 
             # bfill on ascending EQBtw: missing EQBtw gets the data of the next higher EQBtw
@@ -299,7 +268,7 @@ if __name__ == '__main__':
 
         result_tmp = [r for r in result_tmp if not r.empty]
         if result_tmp:
-            result_tmp = pd.concat(result_tmp).groupby(['Code', 'FY', 'EQBtw']).last().reset_index()
+            result_tmp = pd.concat(result_tmp).groupby(['Code', 'FY', eq_basis]).last().reset_index()
             result = pd.concat([result, result_tmp])
 
         # get bluffer
@@ -307,13 +276,13 @@ if __name__ == '__main__':
 
         result['Over'] = result['Est'] - result['EW']
         # 각 FY에 EQBtw별로 아웃라이어는 EW로 전환
-        std = result.groupby(['FY', 'EQBtw'])['Over'].std()
-        mean = result.groupby(['FY', 'EQBtw'])['Over'].mean()
-        result['Over'] = result.apply(lambda x: 0 if (abs(x.Over - mean[x.FY][x.EQBtw]) < 5 * std[x.FY][x.EQBtw]) or x.G==0 else 1, axis=1)
+        std = result.groupby(['FY', eq_basis])['Over'].std()
+        mean = result.groupby(['FY', eq_basis])['Over'].mean()
+        result['Over'] = result.apply(lambda x: 0 if (abs(x.Over - mean[x.FY][x[eq_basis]]) < 5 * std[x.FY][x[eq_basis]]) or x.G==0 else 1, axis=1)
 
         # change Over into EW
-        result.loc[result.Code == 'US1266501006', 'Est'] = result.loc[result.Code == 'US1266501006', 'EW']
-        result.loc[result.Code == 'US1266501006', 'model'] = 'EW'
+        #result.loc[result.Code == 'US1266501006', 'Est'] = result.loc[result.Code == 'US1266501006', 'EW']
+        #result.loc[result.Code == 'US1266501006', 'model'] = 'EW'
         #result['Est'] = result.apply(lambda x: x.EW if x.Over == 1 else x.Est, axis=1)
         #result['model'] = result.apply(lambda x: 'EW' if x.Over == 1 else x.model, axis=1)
 
@@ -352,13 +321,13 @@ if __name__ == '__main__':
         # get data by Code and PeriodEndDate
         result['shares'] = result.apply(lambda x:get_shares(x, shares=shares), axis=1)
         result['name'] = result.apply(lambda x: comp_name.loc[x.Code] if x.Code in comp_name.index else np.nan, axis=1)
-        result = result.sort_values(['Code','FY','EQBtw',q_basis])
+        result = result.sort_values(['Code','FY',eq_basis,q_basis])
         # data 저장
-        result.groupby(['Code','FY','EQBtw']).first().reset_index().sort_values(['Code','FY','EQBtw'], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{period}_{prddate}.csv', encoding='utf-8-sig')
+        result.groupby(['Code','FY',eq_basis]).first().reset_index().sort_values(['Code','FY',eq_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{period}_{prddate}.csv', encoding='utf-8-sig')
 
-        result_sector = groupby_sector(result, sector_name, 'EQBtw')
+        result_sector = groupby_sector(result, sector_name, eq_basis)
         #result_sector.index = result_sector.index.astype(int)
-        result_sector.sort_values(['Sector','FY','EQBtw'], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_EQBtw_{period}_sector_{prddate}.csv', encoding='utf-8-sig')
+        result_sector.sort_values(['Sector','FY',eq_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{eq_basis}_{period}_sector_{prddate}.csv', encoding='utf-8-sig')
 
         # 최근 QBtw에 대한 snapshot 형태 data 제작
         result_snapshot = result.reset_index().set_index(['Code', q_basis]).loc[result.groupby('Code')[q_basis].min().reset_index().set_index(['Code',q_basis]).index]
@@ -367,50 +336,11 @@ if __name__ == '__main__':
 
         print('Step1 Finished')
 
-    if calc_gdp_effect:
+    if calc_curve_effect:
 
         # step2: save total term spread by gdp and time delta to csv
-        total_ts_pd = build_gdp_scenario(model
-                                         , gdp_data_path=gdp_path
-                                         , use_prd=use_prd
-                                         , use_gdp=use_gdp
-                                         , gdp_lag=gdp_lag
-                                         , rolling=rolling
-                                         )
+        total_ts_pd = build_gdp_scenario(model)
         total_ts_pd.to_csv(f'./result/{country}/total_ts.csv', encoding='utf-8-sig')
-
-        cg_list = []
-        if use_gdp:
-            for prdyear in prdFY:
-                ts = merged_ts(total_ts_pd, prdyear, prddate)
-                if len(ts) > 0:
-                    tmp_ts = ts.filter(regex='nan').copy()
-                    cg_list.append(tmp_ts)
-                    ts.to_csv(f'./result/{country}/ts_{prdyear}.csv', encoding='utf-8-sig')
-
-        if use_custom_gdp:
-            custom_gdp = pd.read_excel(f'data/{country}/QGDP.xlsx', sheet_name='prd_con', index_col=0)
-            for cg in custom_gdp:
-                total_ts_pd = build_gdp_scenario(model
-                                                 , gdp_data_path=gdp_path
-                                                 , use_prd=use_prd
-                                                 , use_gdp=use_gdp
-                                                 , gdp_lag=gdp_lag
-                                                 , rolling=rolling
-                                                 , custom_data=custom_gdp[[cg]]
-                                                 )
-                total_ts_pd.to_csv(f'./result/{country}/total_ts_{cg.replace(" ","")}.csv', encoding='utf-8-sig')
-
-                if use_gdp:
-                    for prdyear in prdFY:
-                        ts = merged_ts(total_ts_pd, prdyear, prddate)
-                        if len(ts) > 0:
-                            tmp_ts = ts.filter(regex='nan').copy()
-                            tmp_ts.columns = tmp_ts.columns + cg
-                            cg_list.append(tmp_ts)
-                            ts.to_csv(f'./result/{country}/ts_{prdyear}_{cg.replace(" ","")}.csv', encoding='utf-8-sig')
-
-            pd.concat(cg_list,axis=1).to_csv(f'./result/{country}/total_ts_gdp.csv', encoding='utf-8-sig')
 
         print('Step2 Finished')
 

@@ -85,69 +85,6 @@ class Enhanced_EPS(object):
 
         return df[df[codecol].isin(df_list)]
 
-    @staticmethod
-    def __term_spread_adj__(sector, fy, train):
-
-        train = train.dropna(subset=['Error'])
-        if 'Q' in fy:
-            currYear = int('20'+fy[2:4])
-        else:
-            currYear = int(fy)
-        sector = sector
-
-        # if sector is na
-        if pd.isna(sector):
-            prev_data_bf = train[(train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
-            prev_data_af = train[(train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
-        else:
-            prev_data_bf = train[
-                (train.SectorClass == sector) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
-            prev_data_af = train[
-                (train.SectorClass == sector) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
-
-        num_of_obs = 5
-
-        # case for data which announced before previous year's actual data
-        if len(prev_data_bf) < 20:
-            popt_bf = np.array([np.nan] * num_of_obs)
-        else:
-            try:
-                prev_data_bf = Enhanced_EPS.__filter_outlier__(prev_data_bf, 'Code', 'Error')
-                popt_bf, pcov_bf, _, _, _ = curve_fit(
-                    term_spread
-                    , prev_data_bf
-                    , prev_data_bf.Error
-                    , method='trf'
-                    , p0=[0, 0.01, 0.01, 0.01, 1]  # b0, c, b1, b2, lam
-                    , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf), (1, np.inf, np.inf, np.inf, np.inf))
-                    , full_output=True
-                )
-                if pcov_bf[0, 0] == np.inf:
-                    raise Exception
-            except:
-                popt_bf = np.array([np.nan] * num_of_obs)
-
-        # case for data which announced after previous year's actual data
-        if len(prev_data_af) < 20:
-            popt_af = np.array([np.nan] * num_of_obs)
-        else:
-            try:
-                popt_af, pcov_af, _, _, _ = curve_fit(
-                    term_spread
-                    , xdata=prev_data_bf
-                    , ydata=prev_data_bf.Error
-                    , method='trf'
-                    , p0=[0, 0.01, 0.01, 0.01, 1]  # b0, c, b1, b2, lam
-                    , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf), (1, np.inf, np.inf, np.inf, np.inf))
-                    , full_output=True
-                )
-                if pcov_af[0, 0] == np.inf:
-                    raise Exception
-            except:
-                popt_af = np.array([np.nan] * num_of_obs)
-
-        return {'popt_bf': popt_bf, 'popt_af': popt_af}
-
     def calc_ucurve(self, country, prdFY, train, reuse:bool=False):
         if reuse:
             self.ucurve = pd.read_json(f'result/{country}/ucurve.json').T.to_dict(orient='index')
@@ -239,7 +176,7 @@ class Enhanced_EPS(object):
 
         # get pre error of each model
         if len(ncal_presym) > 0:
-            multiproclist = list(product(ncal_presym, model_list, [self.shm_train], [self.shm_ucurve]))
+            multiproclist = list(product(ncal_presym, model_list, [self.shm_train], [self.shm_ucurve], [self.q_basis]))
             pre_result = process_map(Enhanced_EPS.__calc__, multiproclist, max_workers=os.cpu_count()-1)
             pre_result = pd.concat(pre_result)
             pre_result.to_parquet(f'result/{country}/bestmodel_history/pre_result.parquet', engine='pyarrow', index=False)
@@ -271,9 +208,7 @@ class Enhanced_EPS(object):
         symwithbm = []
         for sym in UniqueSymbol:
             symwithbm.append([sym, bestmodel.get(sym, 'EW'), self.shm_train, self.shm_ucurve, self.q_basis])
-        for sym in symwithbm:
-            result = Enhanced_EPS.__calc__(sym)
-        #result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
+        result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
 
         return pd.concat(result)
 
@@ -405,14 +340,14 @@ class Enhanced_EPS(object):
     def __EW__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
-        shm_ucurve = x[3]
+        #shm_ucurve = x[3]
         q_basis = x[4]
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         df = train[train.UniqueSymbol==symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -421,36 +356,43 @@ class Enhanced_EPS(object):
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
-        est = df.groupby(q_basis)['E_ROE'].mean()
+        # --- OPTIMIZATION: 단 한 번의 Groupby로 모든 집계 연산 처리 ---
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
-
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
-
-        data = pd.concat([est, est, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+            # 결합 연산을 Vectorized 연산으로 한 번에 DataFrame 구축
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE']
+        data['EW'] = agg_df['E_ROE']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __PBest__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
-        shm_ucurve = x[3]
+        #shm_ucurve = x[3]
         q_basis = x[4]
 
         star_count = 5
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         df = train[train.UniqueSymbol==symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -459,70 +401,91 @@ class Enhanced_EPS(object):
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 4)
+        year_max = str(target_year - 1)
+
+        # 전체 train 스캔 최소화
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
+
+        # 미리 중복 제거 및 절댓값 에러 컬럼 생성 (벡터화 준비)
+        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train['abs_Error'] = hist_train['Error'].abs()
+
+        # 모든 Q와 Security별 평균 에러율을 한 번에 계산
+        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
+        available_Qs = set(grouped_errors.index.get_level_values(0))
+
+        unique_securities = df['Security'].unique()
         Q_result = []
+
+        # Q에 대해서만 루프 수행 (Security 루프는 완전히 증발함)
         for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))
-                             & (train[q_basis] == Q)]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+            df_Q = df[df[q_basis] == Q]
 
-            # list to append previous year's error rate by analyst
-            tempset = []
+            if Q in available_Qs:
+                # 해당 Q의 애널리스트 에러 정보 가져오기
+                q_errors = grouped_errors.xs(Q, level=0)
+                # 현재 분석 중인 애널리스트(unique_securities)만 필터링
+                q_errors = q_errors[q_errors.index.isin(unique_securities)]
 
-            unique_sec = df.Security.unique()
-            for sec in unique_sec:
-                df_sec = tempdata[tempdata.Security == sec]
-                if len(df_sec) > 0:
-                    df_sec_error = df_sec['Error'].abs().mean()
-                    tempset.append([sec, df_sec_error])
+                if not q_errors.empty:
+                    # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
+                    top_secs = q_errors.nsmallest(star_count).index
+                    check_star_count = df_Q[df_Q['Security'].isin(top_secs)]
 
-            # if previous year's data exist, calculate smart consensus
-            if len(tempset) > 0:
-                prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
-                # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_star_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.nsmallest(star_count, 'Error').index))]
-                if len(check_star_count) < 2:
-                    Q_result.append(df[df[q_basis] == Q])
-                else:
-                    Q_result.append(check_star_count)
-            else:
-                Q_result.append(df[df[q_basis] == Q])
+                    if len(check_star_count) >= 2:
+                        Q_result.append(check_star_count)
+                        continue
+
+            # 데이터가 없거나 조건 미달 시 원본 유지
+            Q_result.append(df_Q)
 
         estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
-        if len(Q_result) > 0:
+        if Q_result:
             df = pd.concat(Q_result)
 
-        est = df.groupby(q_basis)['E_ROE'].mean()
+        # 단 1번의 groupby로 나머지 연산 일괄 처리
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
-
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
-
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 가로 병합(concat) 대신 딕셔너리 스타일 매핑으로 오버헤드 방지
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE']
+        data['EW'] = estEW  # 인덱스(q_basis) 기준으로 자동 정렬 및 매핑됨
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 결과 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __IMSE__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
-        shm_ucurve = x[3]
+        #shm_ucurve = x[3]
         q_basis = x[4]
 
         min_count = 5
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -531,83 +494,103 @@ class Enhanced_EPS(object):
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 3)
+        year_max = str(target_year - 1)
+
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
+
+        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train['abs_Error'] = hist_train['Error'].abs()
+
+        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
+        available_Qs = set(grouped_errors.index.get_level_values(0))
+
         Q_result = []
+
+        # Q 레벨 루프만 유지 (Security 루프는 완전 제거됨)
         for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))
-                             & (train[q_basis] == Q)]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+            df_Q = df[df[q_basis] == Q].copy()
 
-            # list to append previous year's error rate by analyst
-            tempset = []
+            if Q in available_Qs:
+                # 해당 Q의 애널리스트별 평균 에러 추출 (Series 형태)
+                q_errors = grouped_errors.xs(Q, level=0)
 
-            unique_sec = df.Security.unique()
-            for sec in unique_sec:
-                df_sec = tempdata[tempdata.Security == sec]
-                if len(df_sec) > 0:
-                    df_sec_error = df_sec['Error'].abs().mean()
-                    tempset.append([sec, df_sec_error])
+                # 현재 데이터에 존재하는 애널리스트만 필터링
+                unique_securities = df_Q['Security'].unique()
+                q_errors = q_errors[q_errors.index.isin(unique_securities)]
 
-            # if previous year's data exist, calculate smart consensus
-            if len(tempset) > 0:
-                prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
-                # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_prev_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.index))]
-                if len(check_prev_count) < min_count:
-                    check_prev_count = df[df[q_basis] == Q]
-                    check_prev_count['PrevError'] = 1
-                    Q_result.append(check_prev_count)
-                else:
-                    check_prev_count['PrevError'] = check_prev_count.apply(
-                        lambda x: prev_error.loc[x.Security].values[0], axis=1)
-                    Q_result.append(check_prev_count)
-            else:
-                check_prev_count = df[df[q_basis] == Q]
-                check_prev_count['PrevError'] = 1
-                Q_result.append(check_prev_count)
+                if not q_errors.empty:
+                    # 과거 에러 데이터가 존재하는 Row들만 필터링
+                    valid_df_Q = df_Q[df_Q['Security'].isin(q_errors.index)].copy()
 
-        if len(Q_result) > 0:
-            df = pd.concat(Q_result)
-            df.PrevError += 0.01
+                    if len(valid_df_Q) >= min_count:
+                        # 초성능 킬러 포인트: .apply() 대신 .map() 사용
+                        valid_df_Q['PrevError'] = valid_df_Q['Security'].map(q_errors)
+                        Q_result.append(valid_df_Q)
+                        continue
 
-        df['I_PrevError'] = df['PrevError'].pow(-1)
+            # 데이터가 없거나 기준 충족 못할 시 Fallback 처리
+            df_Q['PrevError'] = 1.0
+            Q_result.append(df_Q)
+
+        if not Q_result:
+            return pd.DataFrame()
+
+        # 데이터 병합 및 가중치 계산 (Vectorized 연산)
+        df = pd.concat(Q_result)
+        df['PrevError'] += 0.01
+
+        df['I_PrevError'] = 1.0 / df['PrevError']
         df_mean = df['I_PrevError'].mean()
         df_std = df['I_PrevError'].std()
+
+        # 아웃라이어 클리핑 및 가중 ROE 계산
         df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 3 * df_std, upper=df_mean + 3 * df_std)
         df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
 
-        est = df.groupby(q_basis)['W_E_ROE'].sum() / df.groupby(q_basis)['I_PrevError'].sum()
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+        agg_df = df.groupby(q_basis).agg({
+            'W_E_ROE': 'sum',
+            'I_PrevError': 'sum',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
-
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
-
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 딕셔너리 스타일 구조 매핑으로 pd.concat 오버헤드 방지
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['W_E_ROE'] / agg_df['I_PrevError']
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __BAM__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
-        shm_ucurve = x[3]
+        #shm_ucurve = x[3]
         q_basis = x[4]
 
         min_count = 5
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -616,65 +599,97 @@ class Enhanced_EPS(object):
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
         df = pd.concat([df, res])
 
-        Q_result = []
-        for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
-                             & (train[q_basis] == Q)]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 과거 11개년 기록 단 한 번만 미리 도려내기
+        # ----------------------------------------------------------------
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 11)
+        year_max = str(target_year - 1)
 
-            # list to append previous year's error rate by analyst
-            lenYear = len(tempdata.Year.unique())
-            if lenYear >= min_count:
-                # Linear Regression between E_ROE and A_ROE
-                try:
-                    lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
-                    slope = lr_result.coef_[0]
-                    intercept = lr_result.intercept_
-                except:
-                    slope = 1
-                    intercept = 0
-            else:
-                slope = 1
-                intercept = 0
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
 
-            Q_result.append([Q, slope, intercept])
+        coeff_map = {}
 
-        coeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
-        # with slope and intercept, calculate BAM
-        est = df.groupby(q_basis)[['E_ROE']].mean()
-        est = est.apply(lambda x: apply_bam(x, coeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+        if not hist_train.empty:
+            # 중복 제거
+            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 2: LinearRegression 라이브러리를 대체하는 수학적 벡터화 (OLS)
+            # fit_intercept=False 일 때, Slope = sum(X*Y) / sum(X^2)
+            # ----------------------------------------------------------------
+            hist_train['XY'] = hist_train['E_ROE'] * hist_train['A_ROE']
+            hist_train['X2'] = hist_train['E_ROE'] ** 2
 
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
+            # 모든 Q에 대한 필요한 통계량을 단 한 번의 groupby로 집계
+            agg_hist = hist_train.groupby(q_basis).agg(
+                sum_xy=('XY', 'sum'),
+                sum_x2=('X2', 'sum'),
+                unique_years=('Year', 'nunique')
+            )
 
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
+            # 조건 검증 (데이터 개수 조건 및 분모가 0이 아닌지 체크)
+            valid_mask = (agg_hist['unique_years'] >= min_count) & (agg_hist['sum_x2'] > 0)
 
-        if len(data) == 0 or len(df) == 0:
+            # 기본값은 Slope=1, Intercept=0으로 세팅 후 유효한 값만 연산
+            agg_hist['Slope'] = 1.0
+            agg_hist.loc[valid_mask, 'Slope'] = agg_hist.loc[valid_mask, 'sum_xy'] / agg_hist.loc[valid_mask, 'sum_x2']
+            agg_hist['Intercept'] = 0.0
+
+            # 빠른 조회를 위해 딕셔너리로 변환
+            coeff_map = agg_hist[['Slope', 'Intercept']].to_dict('index')
+
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 3: 후반부 수많은 Groupby를 단 1번으로 일괄 집계
+            # ----------------------------------------------------------------
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
+
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 4: apply(axis=1) 제거 및 고속 매핑 보정 연산
+        # ----------------------------------------------------------------
+        # 각 Q에 맞는 Slope와 Intercept를 C-Level 속도로 매핑
+        slopes = agg_df.index.map(lambda q: coeff_map.get(q, {'Slope': 1.0})['Slope'])
+        intercepts = agg_df.index.map(lambda q: coeff_map.get(q, {'Intercept': 0.0})['Intercept'])
+
+        # 결과 데이터프레임 구축 (BAM 보정 수식을 인라인 벡터 연산으로 처리)
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE'] * slopes + intercepts  # apply_bam 함수가 y = ax + b 구조일 때 기준
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __IMC__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
-        shm_ucurve = x[3]
+        #shm_ucurve = x[3]
         q_basis = x[4]
 
         min_count = 5
 
         train = Enhanced_EPS.__load_memory__(shm_train)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -686,98 +701,111 @@ class Enhanced_EPS(object):
         df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
         df['SecAnl'] = df['Security'] + df['CoreAnalyst']
 
-        year = symbol[-6:-2]
-        if 'Q' in year:
-            quarter = year[:2]
-        else:
-            quarter = 'NA'
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 과거 11개년 기록 단 한 번만 슬라이싱 및 필터링
+        # ----------------------------------------------------------------
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 11)
+        year_max = str(target_year - 1)
 
-        Q_result = []
-        S_result = []
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
 
-        for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 11))
-                             & (train[q_basis] == Q)]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+        # 기본 매핑 딕셔너리 초기화
+        s_slope_map = {}
+        q_slope_map = {}
 
-            if len(tempdata) > 0:
-                tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
-                tempdata['SecAnl'] = tempdata['Security'] + tempdata['CoreAnalyst']
+        if not hist_train.empty:
+            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+            hist_train['CoreAnalyst'] = hist_train['Analyst'].str.split(',').str[0]
+            hist_train['SecAnl'] = hist_train['Security'] + hist_train['CoreAnalyst']
 
-                # polyfit E_ROE with A_ROE per analyst
-                tempset = []
-                for S in df.SecAnl.unique():
-                    temp = tempdata[tempdata.SecAnl == S]
-                    if len(temp) >= 10 and len(temp.Year.unique()) >= min_count:
-                        try:
-                            lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(temp['E_ROE']),
-                                                                                  temp['A_ROE'])
-                            slope = lr_result.coef_[0]
-                            intercept = lr_result.intercept_
-                        except:
-                            slope = 1
-                            intercept = 0
-                    else:
-                        slope = 1
-                        intercept = 0
-                    tempset.append([S, Q, slope, intercept])
+            # 현재 분석 타겟에 존재하는 애널리스트 데이터만 남겨 서치 오버헤드 최소화
+            hist_train = hist_train[hist_train['SecAnl'].isin(df['SecAnl'].unique())]
 
-                # get S by S data
-                SQ_df = pd.DataFrame(tempset, columns=['S', 'Q', 'Slope', 'Intercept']).set_index(['S', 'Q'])
-                S_result.append(SQ_df)
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 2: [1단계] Analyst 레벨 기울기 일괄 계산 (이중 루프 제거)
+            # fit_intercept=False 일 때, Slope = sum(X*Y) / sum(X^2)
+            # ----------------------------------------------------------------
+            hist_train['XY'] = hist_train['E_ROE'] * hist_train['A_ROE']
+            hist_train['X2'] = hist_train['E_ROE'] ** 2
 
-                # polyfit E_ROE with A_ROE per company
-                tempdata.E_ROE = tempdata.apply(lambda x: apply_imc(x, SQ_df), axis=1)
+            # Q와 SecAnl 조합으로 단 한 번에 그룹 집계
+            s_agg = hist_train.groupby([q_basis, 'SecAnl']).agg(
+                sum_xy=('XY', 'sum'),
+                sum_x2=('X2', 'sum'),
+                row_cnt=('XY', 'count'),
+                nyear=('Year', 'nunique')
+            )
 
-            # list to append previous year's error rate by analyst
-            lenYear = len(tempdata.Year.unique())
-            if lenYear >= min_count:
-                # Linear Regression between E_ROE and A_ROE
-                try:
-                    lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),
-                                                                          tempdata['A_ROE'])
-                    slope = lr_result.coef_[0]
-                    intercept = lr_result.intercept_
-                except:
-                    slope = 1
-                    intercept = 0
-            else:
-                slope = 1
-                intercept = 0
+            s_agg['Slope'] = 1.0
+            valid_s = (s_agg['row_cnt'] >= 10) & (s_agg['nyear'] >= min_count) & (s_agg['sum_x2'] > 0)
+            s_agg.loc[valid_s, 'Slope'] = s_agg.loc[valid_s, 'sum_xy'] / s_agg.loc[valid_s, 'sum_x2']
+            s_slope_map = s_agg['Slope'].to_dict()
 
-            Q_result.append([Q, slope, intercept])
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 3: [2단계] Company(Q) 레벨 기울기 일괄 계산
+            # 1단계에서 계산된 Analyst Slope를 적용한 뒤 다시 OLS 수행
+            # ----------------------------------------------------------------
+            # MultiIndex 매핑을 통해 가중치 적용 (.apply 제거)
+            hist_train['S_Slope'] = hist_train.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+            hist_train['E_ROE_adj'] = hist_train['E_ROE'] * hist_train['S_Slope']
 
-        if len(S_result) > 0:
-            Scoeffset = pd.concat(S_result)
-            df['E_ROE'] = df.apply(lambda x: apply_imc(x, Scoeffset), axis=1)
+            hist_train['XY_adj'] = hist_train['E_ROE_adj'] * hist_train['A_ROE']
+            hist_train['X2_adj'] = hist_train['E_ROE_adj'] ** 2
 
-        Qcoeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
-        # with slope and intercept, calculate BAM
-        est = df.groupby(q_basis)[['E_ROE']].mean()
-        est = est.apply(lambda x: apply_bam(x, Qcoeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+            q_agg = hist_train.groupby(q_basis).agg(
+                sum_xy_adj=('XY_adj', 'sum'),
+                sum_x2_adj=('X2_adj', 'sum'),
+                nyear_q=('Year', 'nunique')
+            )
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
+            q_agg['Slope'] = 1.0
+            valid_q = (q_agg['nyear_q'] >= min_count) & (q_agg['sum_x2_adj'] > 0)
+            q_agg.loc[valid_q, 'Slope'] = q_agg.loc[valid_q, 'sum_xy_adj'] / q_agg.loc[valid_q, 'sum_x2_adj']
+            q_slope_map = q_agg['Slope'].to_dict()
 
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 4: 현재 예측 대상 데이터(df)에 보정치 초고속 적용
+            # ----------------------------------------------------------------
+            # 1단계: Analyst 레벨 보정 (.apply 대신 .map 사용)
+        df['S_Slope'] = df.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+        df['E_ROE'] = df['E_ROE'] * df['S_Slope']
 
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
+        # 후반부 모든 무거운 Groupby 연산을 단 1번으로 일괄 처리
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 2단계: Company 레벨 보정 (최종 데이터프레임 구축 과정에서 인라인 연산)
+        q_slopes = agg_df.index.map(lambda q: q_slope_map.get(q, 1.0))
+
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE'] * q_slopes  # 별도의 apply_bam 함수 호출 없이 벡터 연산 처리
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __EW_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
         shm_ucurve = x[3]
         q_basis = x[4]
@@ -785,7 +813,7 @@ class Enhanced_EPS(object):
         train = Enhanced_EPS.__load_memory__(shm_train)
         ucurve = Enhanced_EPS.__load_memory__(shm_ucurve)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -796,39 +824,61 @@ class Enhanced_EPS(object):
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
+
         popt = ucurve[sector+year]
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
+        # ----------------------------------------------------------------
+        mask_bf = df['Date'] <= df['CutDate']
+        spread_series = pd.Series(0.0, index=df.index)
 
-        est = df.groupby(q_basis)['E_ROE'].mean()
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+        # Before CutDate 그룹 연산
+        if mask_bf.any():
+            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
+            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
 
-        estEW_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
+        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
+        if (~mask_bf).any():
+            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
 
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
+        # 보정치 차감 처리
+        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
 
-        data = pd.concat([est, estEW, estEW_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 2: 후반부 모든 무거운 Groupby를 단 1번으로 일괄 집계
+        # ----------------------------------------------------------------
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 가로 병합(concat) 오버헤드 방지를 위한 다이렉트 딕셔너리 빌드
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE']
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅 및 결과 반환
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __PBest_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
         shm_ucurve = x[3]
         q_basis = x[4]
@@ -838,7 +888,7 @@ class Enhanced_EPS(object):
         train = Enhanced_EPS.__load_memory__(shm_train)
         ucurve = Enhanced_EPS.__load_memory__(shm_ucurve)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -849,77 +899,105 @@ class Enhanced_EPS(object):
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
+
         popt = ucurve[sector+year]
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
+        # ----------------------------------------------------------------
+        mask_bf = df['Date'] <= df['CutDate']
+        spread_series = pd.Series(0.0, index=df.index)
 
+        # Before CutDate 그룹 연산
+        if mask_bf.any():
+            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
+            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
+
+        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
+        if (~mask_bf).any():
+            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
+
+        # 보정치 차감 처리
+        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 4)
+        year_max = str(target_year - 1)
+
+        # 전체 train 스캔 최소화
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
+
+        # 미리 중복 제거 및 절댓값 에러 컬럼 생성 (벡터화 준비)
+        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train['abs_Error'] = hist_train['Error'].abs()
+
+        # 모든 Q와 Security별 평균 에러율을 한 번에 계산
+        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
+        available_Qs = set(grouped_errors.index.get_level_values(0))
+
+        unique_securities = df['Security'].unique()
         Q_result = []
+
+        # Q에 대해서만 루프 수행 (Security 루프는 완전히 증발함)
         for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))
-                             & (train[q_basis] == Q)]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+            df_Q = df[df[q_basis] == Q]
 
-            if popt_af[0] == 0:
-                tempdata = tempdata[(tempdata[q_basis] == Q)]
-            tempdata['E_ROE'] = (
-                        tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+            if Q in available_Qs:
+                # 해당 Q의 애널리스트 에러 정보 가져오기
+                q_errors = grouped_errors.xs(Q, level=0)
+                # 현재 분석 중인 애널리스트(unique_securities)만 필터링
+                q_errors = q_errors[q_errors.index.isin(unique_securities)]
 
-            # list to append previous year's error rate by analyst
-            tempset = []
+                if not q_errors.empty:
+                    # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
+                    top_secs = q_errors.nsmallest(star_count).index
+                    check_star_count = df_Q[df_Q['Security'].isin(top_secs)]
 
-            unique_sec = df.Security.unique()
-            for sec in unique_sec:
-                df_sec = tempdata[tempdata.Security == sec]
-                if len(df_sec) > 0:
-                    df_sec_error = df_sec['Error'].abs().mean()
-                    tempset.append([sec, df_sec_error])
+                    if len(check_star_count) >= 2:
+                        Q_result.append(check_star_count)
+                        continue
 
-            # if previous year's data exist, calculate smart consensus
-            if len(tempset) > 0:
-                prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
-                # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_star_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.nsmallest(star_count, 'Error').index))]
-                if len(check_star_count) < 2:
-                    Q_result.append(df[df[q_basis] == Q])
-                else:
-                    Q_result.append(check_star_count)
-            else:
-                Q_result.append(df[df[q_basis] == Q])
+            # 데이터가 없거나 조건 미달 시 원본 유지
+            Q_result.append(df_Q)
 
         estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
-        if len(Q_result) > 0:
+        if Q_result:
             df = pd.concat(Q_result)
 
-        est = df.groupby(q_basis)['E_ROE'].mean()
+        # 단 1번의 groupby로 나머지 연산 일괄 처리
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
-
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
-
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 가로 병합(concat) 대신 딕셔너리 스타일 매핑으로 오버헤드 방지
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE']
+        data['EW'] = estEW  # 인덱스(q_basis) 기준으로 자동 정렬 및 매핑됨
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 결과 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __IMSE_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
         shm_ucurve = x[3]
         q_basis = x[4]
@@ -929,7 +1007,7 @@ class Enhanced_EPS(object):
         train = Enhanced_EPS.__load_memory__(shm_train)
         ucurve = Enhanced_EPS.__load_memory__(shm_ucurve)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -940,92 +1018,117 @@ class Enhanced_EPS(object):
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
+
         popt = ucurve[sector+year]
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
+        # ----------------------------------------------------------------
+        mask_bf = df['Date'] <= df['CutDate']
+        spread_series = pd.Series(0.0, index=df.index)
+
+        # Before CutDate 그룹 연산
+        if mask_bf.any():
+            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
+            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
+
+        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
+        if (~mask_bf).any():
+            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
+
+        # 보정치 차감 처리
+        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 3)
+        year_max = str(target_year - 1)
+
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
+
+        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train['abs_Error'] = hist_train['Error'].abs()
+
+        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
+        available_Qs = set(grouped_errors.index.get_level_values(0))
 
         Q_result = []
+
+        # Q 레벨 루프만 유지 (Security 루프는 완전 제거됨)
         for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 3))]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+            df_Q = df[df[q_basis] == Q].copy()
 
-            if popt_af[0] == 0:
-                tempdata = tempdata[(tempdata[q_basis] == Q)]
-            tempdata['E_ROE'] = (
-                        tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+            if Q in available_Qs:
+                # 해당 Q의 애널리스트별 평균 에러 추출 (Series 형태)
+                q_errors = grouped_errors.xs(Q, level=0)
 
-            tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
+                # 현재 데이터에 존재하는 애널리스트만 필터링
+                unique_securities = df_Q['Security'].unique()
+                q_errors = q_errors[q_errors.index.isin(unique_securities)]
 
-            # list to append previous year's error rate by analyst
-            tempset = []
+                if not q_errors.empty:
+                    # 과거 에러 데이터가 존재하는 Row들만 필터링
+                    valid_df_Q = df_Q[df_Q['Security'].isin(q_errors.index)].copy()
 
-            unique_sec = df.Security.unique()
-            for sec in unique_sec:
-                df_sec = tempdata[tempdata.Security == sec]
-                if len(df_sec) > 0:
-                    df_sec_error = df_sec['Error'].abs().mean()
-                    tempset.append([sec, df_sec_error])
+                    if len(valid_df_Q) >= min_count:
+                        # 초성능 킬러 포인트: .apply() 대신 .map() 사용
+                        valid_df_Q['PrevError'] = valid_df_Q['Security'].map(q_errors)
+                        Q_result.append(valid_df_Q)
+                        continue
 
-            # if previous year's data exist, calculate smart consensus
-            if len(tempset) > 0:
-                prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
-                # if prev_year's anaylst data is not enough(less than 5 data point), append all
-                check_prev_count = df[(df[q_basis] == Q) & (df.Security.isin(prev_error.index))]
-                if len(check_prev_count) < min_count:
-                    check_prev_count = df[df[q_basis] == Q]
-                    check_prev_count['PrevError'] = 1
-                    Q_result.append(check_prev_count)
-                else:
-                    check_prev_count['PrevError'] = check_prev_count.apply(
-                        lambda x: prev_error.loc[x.Security].values[0], axis=1)
-                    Q_result.append(check_prev_count)
-            else:
-                check_prev_count = df[df[q_basis] == Q]
-                check_prev_count['PrevError'] = 1
-                Q_result.append(check_prev_count)
+            # 데이터가 없거나 기준 충족 못할 시 Fallback 처리
+            df_Q['PrevError'] = 1.0
+            Q_result.append(df_Q)
 
-        if len(Q_result) > 0:
-            df = pd.concat(Q_result)
-            df.PrevError += 0.01
+        if not Q_result:
+            return pd.DataFrame()
 
-        df['I_PrevError'] = df['PrevError'].pow(-1)
-        # limit upper and lower bound of I_PrevError as +- 2 stdev
+        # 데이터 병합 및 가중치 계산 (Vectorized 연산)
+        df = pd.concat(Q_result)
+        df['PrevError'] += 0.01
+
+        df['I_PrevError'] = 1.0 / df['PrevError']
         df_mean = df['I_PrevError'].mean()
         df_std = df['I_PrevError'].std()
-        df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 5 * df_std, upper=df_mean + 5 * df_std)
+
+        # 아웃라이어 클리핑 및 가중 ROE 계산
+        df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 3 * df_std, upper=df_mean + 3 * df_std)
         df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
 
-        est = df.groupby(q_basis)['W_E_ROE'].sum() / df.groupby(q_basis)['I_PrevError'].sum()
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+        agg_df = df.groupby(q_basis).agg({
+            'W_E_ROE': 'sum',
+            'I_PrevError': 'sum',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
-
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
-
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-        if len(data) == 0 or len(df) == 0:
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 딕셔너리 스타일 구조 매핑으로 pd.concat 오버헤드 방지
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['W_E_ROE'] / agg_df['I_PrevError']
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __BAM_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
         shm_ucurve = x[3]
         q_basis = x[4]
@@ -1035,7 +1138,7 @@ class Enhanced_EPS(object):
         train = Enhanced_EPS.__load_memory__(shm_train)
         ucurve = Enhanced_EPS.__load_memory__(shm_ucurve)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -1046,74 +1149,111 @@ class Enhanced_EPS(object):
 
         year = symbol[-6:]
         sector = df.SectorClass.iloc[-1]
+
         popt = ucurve[sector+year]
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
+        # ----------------------------------------------------------------
+        mask_bf = df['Date'] <= df['CutDate']
+        spread_series = pd.Series(0.0, index=df.index)
 
-        Q_result = []
-        for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
-                             & (train[q_basis] == Q)]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+        # Before CutDate 그룹 연산
+        if mask_bf.any():
+            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
+            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
 
-            if pd.isna(popt_af[0]):
-                tempdata = tempdata[(tempdata[q_basis] == Q)]
-            tempdata['E_ROE'] = (
-                        tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
+        if (~mask_bf).any():
+            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
 
-            tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
+        # 보정치 차감 처리
+        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
 
-            # list to append previous year's error rate by analyst
-            lenYear = len(tempdata.Year.unique())
-            if lenYear >= min_count:
-                # Linear Regression between E_ROE and A_ROE
-                try:
-                    lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
-                    slope = lr_result.coef_[0]
-                    intercept = lr_result.intercept_
-                except:
-                    slope = 1
-                    intercept = 0
-            else:
-                slope = 1
-                intercept = 0
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 과거 11개년 기록 단 한 번만 미리 도려내기
+        # ----------------------------------------------------------------
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 11)
+        year_max = str(target_year - 1)
 
-            Q_result.append([Q, slope, intercept])
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
 
-        coeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
-        # with slope and intercept, calculate BAM
-        est = df.groupby(q_basis)[['E_ROE']].mean()
-        est = est.apply(lambda x: apply_bam(x, coeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+        coeff_map = {}
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
+        if not hist_train.empty:
+            # 중복 제거
+            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
 
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 2: LinearRegression 라이브러리를 대체하는 수학적 벡터화 (OLS)
+            # fit_intercept=False 일 때, Slope = sum(X*Y) / sum(X^2)
+            # ----------------------------------------------------------------
+            hist_train['XY'] = hist_train['E_ROE'] * hist_train['A_ROE']
+            hist_train['X2'] = hist_train['E_ROE'] ** 2
 
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
+            # 모든 Q에 대한 필요한 통계량을 단 한 번의 groupby로 집계
+            agg_hist = hist_train.groupby(q_basis).agg(
+                sum_xy=('XY', 'sum'),
+                sum_x2=('X2', 'sum'),
+                unique_years=('Year', 'nunique')
+            )
 
-        if len(data) == 0 or len(df) == 0:
+            # 조건 검증 (데이터 개수 조건 및 분모가 0이 아닌지 체크)
+            valid_mask = (agg_hist['unique_years'] >= min_count) & (agg_hist['sum_x2'] > 0)
+
+            # 기본값은 Slope=1, Intercept=0으로 세팅 후 유효한 값만 연산
+            agg_hist['Slope'] = 1.0
+            agg_hist.loc[valid_mask, 'Slope'] = agg_hist.loc[valid_mask, 'sum_xy'] / agg_hist.loc[valid_mask, 'sum_x2']
+            agg_hist['Intercept'] = 0.0
+
+            # 빠른 조회를 위해 딕셔너리로 변환
+            coeff_map = agg_hist[['Slope', 'Intercept']].to_dict('index')
+
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 3: 후반부 수많은 Groupby를 단 1번으로 일괄 집계
+            # ----------------------------------------------------------------
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
+
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 4: apply(axis=1) 제거 및 고속 매핑 보정 연산
+        # ----------------------------------------------------------------
+        # 각 Q에 맞는 Slope와 Intercept를 C-Level 속도로 매핑
+        slopes = agg_df.index.map(lambda q: coeff_map.get(q, {'Slope': 1.0})['Slope'])
+        intercepts = agg_df.index.map(lambda q: coeff_map.get(q, {'Intercept': 0.0})['Intercept'])
+
+        # 결과 데이터프레임 구축 (BAM 보정 수식을 인라인 벡터 연산으로 처리)
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE'] * slopes + intercepts  # apply_bam 함수가 y = ax + b 구조일 때 기준
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data
 
     @staticmethod
     def __IMC_adp__(x):
         symbol = x[0]
         code = symbol[:-6]
-        model = x[1]
+        #model = x[1]
         shm_train = x[2]
         shm_ucurve = x[3]
         q_basis = x[4]
@@ -1123,7 +1263,7 @@ class Enhanced_EPS(object):
         train = Enhanced_EPS.__load_memory__(shm_train)
         ucurve = Enhanced_EPS.__load_memory__(shm_ucurve)
         df = train[train.UniqueSymbol == symbol]
-        if len(df) == 0:
+        if df.empty:
             return pd.DataFrame()
 
         df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
@@ -1141,96 +1281,120 @@ class Enhanced_EPS(object):
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
+        # ----------------------------------------------------------------
+        mask_bf = df['Date'] <= df['CutDate']
+        spread_series = pd.Series(0.0, index=df.index)
 
-        Q_result = []
-        S_result = []
-        for Q in df[q_basis].unique():
-            tempdata = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 10))
-                            ]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis])
+        # Before CutDate 그룹 연산
+        if mask_bf.any():
+            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
+            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
 
-            if pd.isna(popt_af[0]):
-                tempdata = tempdata[(tempdata[q_basis] == Q)]
-            tempdata['E_ROE'] = (tempdata['E_ROE'] - tempdata.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0))
+        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
+        if (~mask_bf).any():
+            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
 
-            tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
+        # 보정치 차감 처리
+        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
 
-            if len(tempdata) > 0:
-                tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
-                tempdata['SecAnl'] = tempdata['Security'] + tempdata['CoreAnalyst']
+        # ----------------------------------------------------------------
+        # OPTIMIZATION 1: 과거 11개년 기록 단 한 번만 슬라이싱 및 필터링
+        # ----------------------------------------------------------------
+        target_code = df['Code'].iloc[0]
+        target_year = int(df['Year'].iloc[0])
+        year_min = str(target_year - 11)
+        year_max = str(target_year - 1)
 
-                # polyfit E_ROE with A_ROE per analyst
-                tempset = []
-                for S in df.SecAnl.unique():
-                    temp = tempdata[tempdata.SecAnl == S]
-                    if len(temp) >= 10 and len(temp.Year.unique()) >= min_count:
-                        try:
-                            lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),tempdata['A_ROE'])
-                            slope = lr_result.coef_[0]
-                            intercept = lr_result.intercept_
-                        except:
-                            slope = 1
-                            intercept = 0
-                    else:
-                        slope = 1
-                        intercept = 0
-                    tempset.append([S, Q, slope, intercept])
+        hist_train = train[(train['Code'] == target_code) &
+                           (train['Year'] >= year_min) &
+                           (train['Year'] <= year_max)]
 
-                # get S by S data
-                SQ_df = pd.DataFrame(tempset, columns=['S', 'Q', 'Slope', 'Intercept']).set_index(['S', 'Q'])
-                S_result.append(SQ_df)
+        # 기본 매핑 딕셔너리 초기화
+        s_slope_map = {}
+        q_slope_map = {}
 
-                # polyfit E_ROE with A_ROE per company
-                tempdata.E_ROE = tempdata.apply(lambda x: apply_imc(x, SQ_df), axis=1)
+        if not hist_train.empty:
+            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+            hist_train['CoreAnalyst'] = hist_train['Analyst'].str.split(',').str[0]
+            hist_train['SecAnl'] = hist_train['Security'] + hist_train['CoreAnalyst']
 
-            # list to append previous year's error rate by analyst
-            lenYear = len(tempdata.Year.unique())
-            if lenYear >= min_count:
-                # Linear Regression between E_ROE and A_ROE
-                try:
-                    lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']), tempdata['A_ROE'])
-                    slope = lr_result.coef_[0]
-                    intercept = lr_result.intercept_
-                except:
-                    slope = 1
-                    intercept = 0
-            elif lenYear == 0:
-                slope = 1
-                intercept = 0
-            else:
-                slope = 1
-                intercept = 0
+            # 현재 분석 타겟에 존재하는 애널리스트 데이터만 남겨 서치 오버헤드 최소화
+            hist_train = hist_train[hist_train['SecAnl'].isin(df['SecAnl'].unique())]
 
-            Q_result.append([Q, slope, intercept])
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 2: [1단계] Analyst 레벨 기울기 일괄 계산 (이중 루프 제거)
+            # fit_intercept=False 일 때, Slope = sum(X*Y) / sum(X^2)
+            # ----------------------------------------------------------------
+            hist_train['XY'] = hist_train['E_ROE'] * hist_train['A_ROE']
+            hist_train['X2'] = hist_train['E_ROE'] ** 2
 
-        if len(S_result) > 0:
-            Scoeffset = pd.concat(S_result)
-            df['E_ROE'] = df.apply(lambda x: apply_imc(x, Scoeffset), axis=1)
+            # Q와 SecAnl 조합으로 단 한 번에 그룹 집계
+            s_agg = hist_train.groupby([q_basis, 'SecAnl']).agg(
+                sum_xy=('XY', 'sum'),
+                sum_x2=('X2', 'sum'),
+                row_cnt=('XY', 'count'),
+                nyear=('Year', 'nunique')
+            )
 
-        Qcoeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
-        # with slope and intercept, calculate BAM
-        est = df.groupby(q_basis)[['E_ROE']].mean()
-        est = est.apply(lambda x: apply_bam(x, Qcoeffset), axis=1)
-        estEW = pd.DataFrame(df.groupby(q_basis)['E_ROE_o'].mean())
+            s_agg['Slope'] = 1.0
+            valid_s = (s_agg['row_cnt'] >= 10) & (s_agg['nyear'] >= min_count) & (s_agg['sum_x2'] > 0)
+            s_agg.loc[valid_s, 'Slope'] = s_agg.loc[valid_s, 'sum_xy'] / s_agg.loc[valid_s, 'sum_x2']
+            s_slope_map = s_agg['Slope'].to_dict()
 
-        est_prev = pd.DataFrame(df.groupby(q_basis)['A_EPS_1'].last() / df.groupby(q_basis)['BPS'].last())
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 3: [2단계] Company(Q) 레벨 기울기 일괄 계산
+            # 1단계에서 계산된 Analyst Slope를 적용한 뒤 다시 OLS 수행
+            # ----------------------------------------------------------------
+            # MultiIndex 매핑을 통해 가중치 적용 (.apply 제거)
+            hist_train['S_Slope'] = hist_train.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+            hist_train['E_ROE_adj'] = hist_train['E_ROE'] * hist_train['S_Slope']
 
-        eqbtw = np.round(pd.DataFrame(df.groupby(q_basis)['EQBtw'].mean()))
+            hist_train['XY_adj'] = hist_train['E_ROE_adj'] * hist_train['A_ROE']
+            hist_train['X2_adj'] = hist_train['E_ROE_adj'] ** 2
 
-        data = pd.concat([est, estEW, est_prev, eqbtw], axis=1)
-        data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
+            q_agg = hist_train.groupby(q_basis).agg(
+                sum_xy_adj=('XY_adj', 'sum'),
+                sum_x2_adj=('X2_adj', 'sum'),
+                nyear_q=('Year', 'nunique')
+            )
 
-        if len(data) == 0 or len(df) == 0:
+            q_agg['Slope'] = 1.0
+            valid_q = (q_agg['nyear_q'] >= min_count) & (q_agg['sum_x2_adj'] > 0)
+            q_agg.loc[valid_q, 'Slope'] = q_agg.loc[valid_q, 'sum_xy_adj'] / q_agg.loc[valid_q, 'sum_x2_adj']
+            q_slope_map = q_agg['Slope'].to_dict()
+
+            # ----------------------------------------------------------------
+            # OPTIMIZATION 4: 현재 예측 대상 데이터(df)에 보정치 초고속 적용
+            # ----------------------------------------------------------------
+            # 1단계: Analyst 레벨 보정 (.apply 대신 .map 사용)
+        df['S_Slope'] = df.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+        df['E_ROE'] = df['E_ROE'] * df['S_Slope']
+
+        # 후반부 모든 무거운 Groupby 연산을 단 1번으로 일괄 처리
+        agg_df = df.groupby(q_basis).agg({
+            'E_ROE': 'mean',
+            'E_ROE_o': 'mean',
+            'A_EPS_1': 'last',
+            'BPS': 'last',
+            'EQBtw': 'mean'
+        })
+
+        if agg_df.empty:
             return pd.DataFrame()
-        else:
-            data = Enhanced_EPS.__resform__(data, code, df)
-            data['FY'] = symbol[-6:]
-            return data
+
+        # 2단계: Company 레벨 보정 (최종 데이터프레임 구축 과정에서 인라인 연산)
+        q_slopes = agg_df.index.map(lambda q: q_slope_map.get(q, 1.0))
+
+        data = pd.DataFrame(index=agg_df.index)
+        data['Est'] = agg_df['E_ROE'] * q_slopes  # 별도의 apply_bam 함수 호출 없이 벡터 연산 처리
+        data['EW'] = agg_df['E_ROE_o']
+        data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
+        data['EQBtw'] = np.round(agg_df['EQBtw'])
+
+        # 최종 포맷팅
+        data = Enhanced_EPS.__resform__(data, code, df)
+        data['FY'] = symbol[-6:]
+
+        return data

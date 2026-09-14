@@ -5,7 +5,7 @@ import sys
 abs_path = 'D:/Factor_DB/us'
 
 mktval = pd.read_parquet(f'./amktcap.parquet', engine='pyarrow')
-listequ = pd.read_parquet(f'D:\Factor_DB\members/master_RAY.parquet', engine='pyarrow')
+listequ = pd.read_parquet(f'D:/Factor_DB/members/master_RAY.parquet', engine='pyarrow')
 
 list_total = []
 

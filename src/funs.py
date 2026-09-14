@@ -67,8 +67,8 @@ def load_db(code):
 
 
 def term_spread(x, b0, c, b1, b2, lam):
-    theta = x.DBtw / 365 / lam
-    return b0 + c*x.Gdp/100 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
+    theta = x / 365 / lam
+    return b0 + b1 * np.exp(-theta) + b2 * theta * np.exp(-theta)
 
 
 def avg_by_unique_sec(df, column='E_ROE', weight_column=None, method='simple'):
@@ -118,73 +118,72 @@ def apply_imc(x, tempset):
 
 def term_spread_adj(sector, year, train):
 
-    train = train.dropna(subset=['Error'])
     if 'Q' in year:
         currYear = int('20'+year[2:4])
+        currQ = year[:2]
     else:
         currYear = int(year[:4])
-    sector = sector
-    # if sector is na
-    if pd.isna(sector):
-        prev_data_bf = train[(train.Year <= str(currYear - 2))  & (train.Year >= str(currYear - 11))]
-        prev_data_af = train[(train.Year <= str(currYear - 1))  & (train.Year >= str(currYear - 10))]
-    else:
-        prev_data_bf = train[(train.SectorClass == sector) & (train.Year <= str(currYear - 2)) & (train.Year >= str(currYear - 11))]
-        prev_data_af = train[(train.SectorClass == sector) & (train.Year <= str(currYear - 1)) & (train.Year >= str(currYear - 10))]
+        currQ = None
 
+    # ----------------------------------------------------------------
+    # OPTIMIZATION 1: 데이터 필터링 선행 (전체 데이터 dropna 금지)
+    # ----------------------------------------------------------------
+    # Sector 필터링 1차 적용 (전체 스캔 방지)
+    if not pd.isna(sector):
+        sector_df = train[train['SectorClass'] == sector]
+    else:
+        sector_df = train
+
+    # 과거 연도 경계값 문자열 미리 생성 (루프 내 반복 방지)
+    str_bf_min, str_bf_max = str(currYear - 11), str(currYear - 2)
+    str_af_min, str_af_max = str(currYear - 10), str(currYear - 1)
+
+    # 데이터 서브셋 슬라이싱
+    if currQ:
+        sector_df = sector_df[sector_df['Q']==currQ]
+    prev_data_bf = sector_df[(sector_df['Year'] >= str_bf_min) & (sector_df['Year'] <= str_bf_max)]
+    prev_data_af = sector_df[(sector_df['Year'] >= str_af_min) & (sector_df['Year'] <= str_af_max)]
+
+    # ----------------------------------------------------------------
+    # OPTIMIZATION 2: 아주 작아진 데이터프레임에만 dropna 적용 (속도 혁명)
+    # ----------------------------------------------------------------
+    prev_data_bf = prev_data_bf.dropna(subset=['Error'])
+    prev_data_af = prev_data_af.dropna(subset=['Error'])
     num_of_obs = 5
 
-    # case for data which announced before previous year's actual data
+    fit_kwargs = {
+        'method': 'trf',
+        'p0': [0, 0.01, 0.01, 0.01, 1],  # b0, c, b1, b2, lam
+        'bounds': ((-1, -np.inf, -np.inf, -np.inf, -np.inf), (1, np.inf, np.inf, np.inf, np.inf))
+    }
+    # --- Case 1: Before Previous Year's Actual Data ---
     if len(prev_data_bf) < 20:
-        popt_bf = np.array([np.nan] * num_of_obs)
+        popt_bf = np.full(num_of_obs, np.nan)
     else:
         try:
-            popt_bf, pcov_bf = curve_fit(term_spread
-                , prev_data_bf
-                , prev_data_bf.Error
-                , method='trf'
-                , p0=[0, 0.01, 0.01, 0.01, 1]#b0, c, b1, b2, lam
-                , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf),(1, np.inf, np.inf, np.inf, np.inf))
-            )
-            if pcov_bf[0,0] == np.inf:
+            x_matrix = prev_data_bf['DBtw'].to_numpy(dtype=np.float64)
+            y_vector = prev_data_bf['Error'].to_numpy(dtype=np.float64)
+            popt_bf, pcov_bf = curve_fit(term_spread, x_matrix, y_vector, **fit_kwargs)
+            if pcov_bf[0, 0] == np.inf:
                 raise Exception
         except:
-            popt_bf = np.array([np.nan] * num_of_obs)
+            popt_bf = np.full(num_of_obs, np.nan)
 
-    # case for data which announced after previous year's actual data
+    # --- Case 2: After Previous Year's Actual Data ---
     if len(prev_data_af) < 20:
-        popt_af = np.array([np.nan] * num_of_obs)
+        popt_af = np.full(num_of_obs, np.nan)
     else:
         try:
-            popt_af, pcov_af = curve_fit(
-                term_spread
-                , xdata=prev_data_bf
-                , ydata=prev_data_bf.Error
-                , method='trf'
-                , p0=[0, 0.01, 0.01, 0.01, 1]#b0, c, b1, b2, lam
-                , bounds=((-1, -np.inf, -np.inf, -np.inf, -np.inf),(1, np.inf, np.inf, np.inf, np.inf))
-            )
-            if pcov_af[0,0] == np.inf:
+            # BUG FIXED: xdata와 ydata를 prev_data_af 기준으로 올바르게 변경
+            x_matrix = prev_data_af['DBtw'].to_numpy(dtype=np.float64)
+            y_vector = prev_data_af['Error'].to_numpy(dtype=np.float64)
+            popt_af, pcov_af = curve_fit(term_spread, x_matrix, y_vector, **fit_kwargs)
+            if pcov_af[0, 0] == np.inf:
                 raise Exception
         except:
-            popt_af = np.array([np.nan] * num_of_obs)
+            popt_af = np.full(num_of_obs, np.nan)
 
     return {'popt_bf':popt_bf, 'popt_af':popt_af}
-
-
-def EW(x, train):
-
-    symbol = x
-    df = train[train.UniqueSymbol == symbol]
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    EW = df.groupby('QBtw')['E_ROE'].mean()
-    data = EW - df.groupby('QBtw')['A_ROE'].mean()
-    data_std = df.groupby('QBtw')['E_ROE'].std()
-    fulldata = pd.DataFrame(
-        {'QBtw': data.index, 'Est': EW.values, 'Error': data.values, 'Std': data_std.values, 'Code': [symbol[:7]] * len(data), 'FY': [symbol[7:]] * len(data)}
-    )
-
-    return fulldata
 
 
 def get_quarter(x, lag:int=1):
@@ -218,21 +217,14 @@ def safe_read_csv(file, **kwargs)->pd.DataFrame:
 
 def build_data(path: str = './data/consenlist/*.csv'
                , period: str = 'Y'
-               , use_gdp: bool = True
-               , gdp_path: str = './data/QGDP.xlsx'
-               , gdp_header: int = 0
-               , gdp_lag: int = 0
-               , rolling: int = 0
                , ts_length: int = 10
                , sector_len: int = 2
-               , country: str = 'kr'):
+               , country: str = 'kr'
+               , prddate: str = None):
     '''
     build dataset for calculate Smart Consensus
     :param path: estimation data path
     :param period: period type - 'Y' for year, 'Q' for quarter
-    :param gdppath: economic data path
-    :param gdp_header: header row - 13 for QuantiWise data, 0 for Refinitiv data
-    :param gdp_lag: lagged month for economic data
     :param rolling: rolling window for economic data
     :param ts_length: year length to use
     :param country: country('kr' or 'us')
@@ -256,9 +248,11 @@ def build_data(path: str = './data/consenlist/*.csv'
         tmp_df = safe_read_csv(file)
         tmp_df['NomialFY'] = file.split('_')[-1].split('.')[0]
         df_list.append(tmp_df)
-    df = pd.concat(df_list, ignore_index=True, axis=0)
+    if not df_list:
+        return pd.DataFrame()
 
-    df = df.dropna(how='all')
+    df = pd.concat(df_list, ignore_index=True, axis=0).dropna(how='all')
+
     if country == 'us':
         df = df.rename(columns={'Instrument': 'Code'
             , 'Analyst Name': 'Analyst'
@@ -267,20 +261,17 @@ def build_data(path: str = './data/consenlist/*.csv'
             , 'Earnings Per Share - Broker Estimate': 'E_EPS'
             , 'EPS': 'A_EPS'
             , 'GICS': 'Sector'})
-        df = df.dropna(subset='Year')
+        df = df.dropna(subset=['Year'])
         # in PeriodEndDate, some data has 'YYYY-MM-DD' format, and some has 'YYYY-MM-DD HH:MM:SS' format.
-        df['PeriodEndDate'] = df['PeriodEndDate'].str.split(' ').str[0]
-        df.PeriodEndDate = pd.to_datetime(df.PeriodEndDate)
-        # if PeriodEndDate is less than july, use next year. Else, use current year
-        df['Year'] = np.where(df['PeriodEndDate'].dt.month < 7, df['Year'].astype(int) - 1, df['Year'])
-        df.Year = df.Year.astype(int).astype(str)
+        df['PeriodEndDate'] = pd.to_datetime(df['PeriodEndDate'].str.slice(0, 10))
+        df['Year'] = np.where(df['PeriodEndDate'].dt.month < 7, df['Year'].astype(int) - 1, df['Year'].astype(int)).astype(str)
     else:
         row_fq = df['NomialFY'].str[0]
         row_fy = df['NomialFY'].str[-4:]
-        fq_to_month = np.where(row_fq=='1', '03-31', np.where(row_fq=='2', '06-30', np.where(row_fq=='3', '09-30', '12-31')))
-        df['PeriodEndDate'] = pd.to_datetime(row_fy + '-' + fq_to_month)
+        fq_map = {'1': '03-31', '2': '06-30', '3': '09-30', '4': '12-31'}
+        df['PeriodEndDate'] = pd.to_datetime(row_fy + '-' + row_fq.map(fq_map))
 
-    df.Date = pd.to_datetime(df.Date.str.split(' ').str[0])
+    df['Date'] = pd.to_datetime(df['Date'].str.slice(0, 10))
 
     if period == 'Q':
         df['FY'] = pd.to_datetime(df.PeriodEndDate).apply(lambda x: get_quarter(x, lag=1))
@@ -357,31 +348,15 @@ def build_data(path: str = './data/consenlist/*.csv'
     df['EQBtw'] = (df['totalDiff'] / 3).astype(int)
     df['Year'] = df.Year.astype(str)
 
-    temp_today = dt.datetime.today()
+    if prddate:
+        temp_today = pd.to_datetime(prddate)
+    else:
+        temp_today = dt.datetime.today()
     df['totalDiff'] = (temp_today.year - df.Date.dt.year) * 12 + (temp_today.month - df.Date.dt.month)
     df['CQBtw'] = (df['totalDiff'] / 3).astype(int)
 
     df = df.drop(['YearDiff', 'MonthDiff', 'totalDiff', 'equalEDate'], axis=1)
     df['CutDate'] = df['FilingDeadline']
-
-    if use_gdp:
-        gdp = pd.read_excel(gdp_path, sheet_name='act', header=gdp_header, index_col=0, parse_dates=True).dropna(how='all', axis=0).dropna(axis=1)
-        if gdp_lag > 0:
-            gdp.index = gdp.index + pd.DateOffset(months=gdp_lag)
-        gdp_roll = gdp.rolling(rolling).mean().dropna()
-        # extend index of gdp_roll to date_max
-        gdp_roll = gdp_roll.reindex(pd.date_range(gdp_roll.index[0], date_max, freq='D'))
-        gdp_roll = gdp_roll.ffill()
-
-        if 'FX' in gdp_path:
-            # use current / 1 year average value
-            gdp_roll = gdp_roll / gdp_roll.rolling(255).mean()
-            df['Gdp'] = df.Date.map(gdp_roll.iloc[:,0])
-
-        else:
-            df['Gdp'] = df.Date.map(gdp_roll.iloc[:,0])
-    else:
-        df['Gdp'] = 0
 
     if ts_length == -1:
         pass
@@ -467,325 +442,6 @@ def result_formatter_calc_growth(data):
 
     return data
 
-def IMC_adp_cache(x):
-
-    symbol = x[0]
-    code = symbol[:-6]
-    train = load_duckdb(code)
-
-    min_count = x[1]
-    year_range = x[2]
-    ucurve = x[3]
-
-    df = train[train.UniqueSymbol == symbol]
-    df['E_ROE_o'] = df['E_ROE'].copy()
-
-    year = symbol[-6:-2]
-    sector = df.SectorClass.iloc[-1]
-    popt = ucurve[sector, int(year)]
-    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
-    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
-
-    sub_train = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))]
-    sub_train['E_ROE_af'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0)
-    sub_train['E_ROE_bf'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0)
-
-    # if adjusted ROE's error is become larger, do not adjust
-    if (sub_train['E_ROE_bf'] - sub_train['A_ROE']).abs().mean() > (sub_train['E_ROE'] - sub_train['A_ROE']).abs().mean():
-        adj = False
-    else:
-        adj = True
-
-    if adj:
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-    df['CoreAnalyst'] = df.Analyst.str.split(',', expand=True)[0]
-    df['SecAnl'] = df['Security'] + df['CoreAnalyst']
-
-    Q_result = []
-    S_result = []
-
-    for Q in df.QBtw.unique():
-        if Q < 4:
-            tempdata = sub_train[(train.Year >= str(int(df.Year.iloc[0]) - 3))]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            if popt_af[0] == 0:
-                tempdata = tempdata[(tempdata.QBtw == Q)]
-            if adj:
-                tempdata['E_ROE'] = tempdata['E_ROE_af']
-        else:
-            tempdata = sub_train[(train.Year <= str(int(df.Year.iloc[0]) - 2))]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            if popt_bf[0] == 0:
-                tempdata = tempdata[(tempdata.QBtw == Q)]
-            if adj:
-                tempdata['E_ROE'] = tempdata['E_ROE_bf']
-
-        tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
-
-        if len(tempdata) > 0:
-            tempdata['CoreAnalyst'] = tempdata.Analyst.str.split(',', expand=True)[0]
-            tempdata['SecAnl'] = tempdata['Security'] + tempdata['CoreAnalyst']
-
-            # polyfit E_ROE with A_ROE per analyst
-            tempset = []
-            for S in df.SecAnl.unique():
-                temp = tempdata[tempdata.SecAnl == S]
-                if len(temp) >= 10 and len(temp.Year.unique()) >= min_count:
-                    try:
-                        lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),
-                                                                              tempdata['A_ROE'])
-                        slope = lr_result.coef_[0]
-                        intercept = lr_result.intercept_
-                    except:
-                        slope = 1
-                        intercept = 0
-                else:
-                    slope = 1
-                    intercept = 0
-                tempset.append([S, Q, slope, intercept])
-
-            # get S by S data
-            SQ_df = pd.DataFrame(tempset, columns=['S', 'Q', 'Slope', 'Intercept']).set_index(['S', 'Q'])
-            S_result.append(SQ_df)
-
-            # polyfit E_ROE with A_ROE per company
-            tempdata.E_ROE = tempdata.apply(lambda x: apply_imc(x, SQ_df), axis=1)
-
-        # list to append previous year's error rate by analyst
-        lenYear = len(tempdata.Year.unique())
-        if lenYear >= min_count:
-            # Linear Regression between E_ROE and A_ROE
-            try:
-                lr_result = LinearRegression(fit_intercept=False).fit(pd.DataFrame(tempdata['E_ROE']),
-                                                                      tempdata['A_ROE'])
-                slope = lr_result.coef_[0]
-                intercept = lr_result.intercept_
-            except:
-                slope = 1
-                intercept = 0
-        elif lenYear == 0:
-            slope = 1
-            intercept = 0
-        else:
-            slope = 1
-            intercept = 0
-
-        Q_result.append([Q, slope, intercept])
-
-    if len(S_result) > 0:
-        Scoeffset = pd.concat(S_result)
-        df['E_ROE'] = df.apply(lambda x: apply_imc(x, Scoeffset), axis=1)
-
-        Scoeffset_mean = Scoeffset.reset_index().groupby('Q').Slope.mean()
-    else:
-        Scoeffset_mean = pd.Series([1] * len(df.QBtw.unique()), index=df.QBtw.unique())
-
-    Qcoeffset = pd.DataFrame(Q_result, columns=['Q', 'Slope', 'Intercept']).set_index('Q')
-
-    # with slope and intercept, calculate BAM
-    estIMC_step1 = pd.DataFrame(df.groupby('QBtw')['E_ROE'].mean())
-    estIMC = estIMC_step1.apply(lambda x: apply_bam(x, Qcoeffset), axis=1)
-
-    estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
-    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
-
-    eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
-
-    data = pd.concat([estIMC, estEW, estEW_prev, Scoeffset_mean, Qcoeffset.Slope, eqbtw], axis=1)
-    data.columns = ['Est', 'EW', 'EW_prev', 'SCoeff', 'QCoeff', 'EQBtw']
-
-    data = result_formatter(data, code, df, popt_bf, popt_af)
-
-    return data
-
-
-def IMSE_adp_cache(x):
-
-    symbol = x[0]
-    code = symbol[:-6]
-    train = load_duckdb(code)
-
-    min_count = x[1]
-    year_range = x[2]
-    ucurve = x[3]
-
-    df = train[train.UniqueSymbol == symbol]
-    df['E_ROE_o'] = df['E_ROE'].copy()
-
-    year = symbol[-6:-2]
-    sector = df.SectorClass.iloc[-1]
-    popt = ucurve[sector, int(year)]
-    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
-    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
-
-    sub_train = train[(train.Code == df.Code.iloc[0])
-                             & (train.Year <= str(int(df.Year.iloc[0]) - 1))
-                             & (train.Year >= str(int(df.Year.iloc[0]) - 4))]
-    sub_train['E_ROE_af'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_af), axis=1).fillna(0)
-    sub_train['E_ROE_bf'] = sub_train['E_ROE'] - sub_train.apply(lambda x: term_spread(x, *popt_bf), axis=1).fillna(0)
-
-    # if adjusted ROE's error is become larger, do not adjust
-    if (sub_train['E_ROE_bf'] - sub_train['A_ROE']).abs().mean() > (sub_train['E_ROE'] - sub_train['A_ROE']).abs().mean():
-        adj = False
-    else:
-        adj = True
-
-    #tadj = False
-    if adj:
-        df['E_ROE'] = (df['E_ROE']
-                       - df.apply(lambda x:
-                                  term_spread(x, *popt_bf)
-                                  if x.Date <= x.CutDate
-                                  else term_spread(x, *popt_af)
-                                  , axis=1).fillna(0))
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-
-    Q_result = []
-
-    for Q in df.QBtw.unique():
-        if Q < 4:
-            tempdata = sub_train[(train.Year >= str(int(df.Year.iloc[0]) - 3))]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            if popt_af[0] == 0:
-                tempdata = tempdata[(tempdata.QBtw == Q)]
-            if adj:
-                tempdata['E_ROE'] = tempdata['E_ROE_af']
-        else:
-            tempdata = sub_train[(train.Year <= str(int(df.Year.iloc[0]) - 2))]
-            tempdata = tempdata.drop_duplicates(subset=['E_ROE', 'Security', 'Year', 'QBtw'])
-            if popt_bf[0] == 0:
-                tempdata = tempdata[(tempdata.QBtw == Q)]
-            if adj:
-                tempdata['E_ROE'] = tempdata['E_ROE_bf']
-
-        tempdata['Error'] = tempdata['E_ROE'] - tempdata['A_ROE']
-
-        # list to append previous year's error rate by analyst
-        tempset = []
-
-        unique_sec = df.Security.unique()
-        for sec in unique_sec:
-            df_sec = tempdata[tempdata.Security == sec]
-            if len(df_sec) > 0:
-                df_sec_error = df_sec['Error'].abs().mean()
-                tempset.append([sec, df_sec_error])
-
-        # if previous year's data exist, calculate smart consensus
-        if len(tempset) > 0:
-            prev_error = pd.DataFrame(tempset, columns=['Security', 'Error']).set_index('Security')
-            # if prev_year's anaylst data is not enough(less than 5 data point), append all
-            check_prev_count = df[(df.QBtw == Q) & (df.Security.isin(prev_error.index))]
-            if len(check_prev_count) < min_count:
-                check_prev_count = df[df.QBtw == Q]
-                check_prev_count['PrevError'] = 1
-                Q_result.append(check_prev_count)
-            else:
-                check_prev_count['PrevError'] = check_prev_count.apply(lambda x: prev_error.loc[x.Security].values[0], axis=1)
-                Q_result.append(check_prev_count)
-        else:
-            check_prev_count = df[df.QBtw == Q]
-            check_prev_count['PrevError'] = 1
-            Q_result.append(check_prev_count)
-
-    if len(Q_result) > 0:
-        df = pd.concat(Q_result)
-        df.PrevError += 0.01
-
-    df['I_PrevError'] = df['PrevError'].pow(-1)
-    # limit upper and lower bound of I_PrevError as +- 2 stdev
-    df_mean = df['I_PrevError'].mean()
-    df_std = df['I_PrevError'].std()
-    df['I_PrevError'] = df['I_PrevError'].clip(lower=df_mean - 5 * df_std, upper=df_mean + 5 * df_std)
-    df['W_E_ROE'] = df['E_ROE'] * df['I_PrevError']
-    estIMSE = df.groupby('QBtw')['W_E_ROE'].sum() / df.groupby('QBtw')['I_PrevError'].sum()
-
-    estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
-    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
-
-    eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
-
-    data = pd.concat([estIMSE, estEW, estEW_prev, eqbtw], axis=1)
-    data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-    data = result_formatter(data, code, df, popt_bf, popt_af)
-
-    return data
-
-def EW_adp_cache(x):
-
-    symbol = x[0]
-    code = symbol[:-6]
-    train = load_duckdb(code)
-
-    min_count = x[1]
-    year_range = x[2]
-    ucurve = x[3]
-
-    df = train[train.UniqueSymbol == symbol]
-    df['E_ROE_o'] = df['E_ROE'].copy()
-
-    year = symbol[-6:-2]
-    sector = df.SectorClass.iloc[-1]
-    popt = ucurve[sector, int(year)]
-    popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
-    popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
-
-    df['E_ROE'] = (df['E_ROE']
-                   - df.apply(lambda x:
-                              term_spread(x, *popt_bf)
-                              if x.Date <= x.CutDate
-                              else term_spread(x, *popt_af)
-                              , axis=1).fillna(0))
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-
-    estAdpEW = df.groupby('QBtw')['E_ROE'].mean()
-
-    estEW = pd.DataFrame(df.groupby('QBtw')['E_ROE_o'].mean())
-    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
-
-    eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
-
-    data = pd.concat([estAdpEW, estEW, estEW_prev, eqbtw], axis=1)
-    data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-    data = result_formatter(data, code, df, popt_bf, popt_af)
-
-    return data
-
-
-def EW_cache(x):
-
-    symbol = x[0]
-    code = symbol[:-6]
-    train = load_duckdb(code)
-
-    df = train[train.UniqueSymbol == symbol]
-    df['E_ROE_o'] = df['E_ROE'].copy()
-
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-
-    estEW = df.groupby('QBtw')['E_ROE'].mean()
-
-    # estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
-    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
-
-    eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
-
-    data = pd.concat([estEW, estEW, estEW_prev, eqbtw], axis=1)
-    data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-    data = result_formatter(data, code, df, 0, 0)
-
-    return data
-
 def generate_financial_periods(start_prd, suffix='AS'):
     # '2Q26' 또는 '2Q26AS'에서 접미사 제거 후 분기/연도 추출
     clean_prd = start_prd.replace(suffix, '')
@@ -806,31 +462,6 @@ def generate_financial_periods(start_prd, suffix='AS'):
     curveFY = [f"{p.quarter}Q{str(p.year)[2:]}{suffix}" for p in curve_periods]
 
     return prdFY, curveFY
-
-def EW_duckdb(x):
-
-    symbol = x
-    code = symbol[:-6]
-    train = load_duckdb(code)
-
-    df = train[train.UniqueSymbol == symbol]
-    df['E_ROE_o'] = df['E_ROE'].copy()
-
-    df = df.drop_duplicates(subset=['E_ROE', 'Security', 'QBtw'])
-
-    estEW = df.groupby('QBtw')['E_ROE'].mean()
-
-    # estEW = pd.DataFrame(df_copy.groupby('QBtw')['E_ROE'].mean())
-    estEW_prev = pd.DataFrame(df.groupby('QBtw')['A_EPS_1'].last() / df.groupby('QBtw')['BPS'].last())
-
-    eqbtw = np.round(pd.DataFrame(df.groupby('QBtw')['EQBtw'].mean()))
-
-    data = pd.concat([estEW, estEW, estEW_prev, eqbtw], axis=1)
-    data.columns = ['Est', 'EW', 'EW_prev', 'EQBtw']
-
-    data = result_formatter(data, code, df, 0, 0)
-
-    return data
 
 
 def term_spread_now(x, gdp, b0, c, b1, b2, lam):
@@ -883,45 +514,14 @@ def merged_ts(total_ts, fy:str, prddate:str='2024-11-11'):
     return ts
 
 
-def build_gdp_scenario(model, gdp_data_path, use_prd:bool=True, use_gdp:bool=True, gdp_lag:int=0, rolling:int=1, custom_data=None):
+def build_gdp_scenario(model):
 
-    if use_gdp:
-        # save total term spread by gdp and time delta to csv
-        gdp = pd.read_excel(gdp_data_path, sheet_name='act', header=13, index_col=0, parse_dates=True).dropna(how='all', axis=0).dropna(axis=1)
-        gdp.index = gdp.index + pd.DateOffset(months=gdp_lag)
-        gdp.columns = ['gdp']
-        if use_prd:
-            if custom_data is None:
-                gdp_prd = pd.read_excel(gdp_data_path, sheet_name='prd', header=0, index_col=0, parse_dates=True)
-            else:
-                # custom_data = [0.3, 0.5, 0.6, 0.7]
-                gdp_prd = custom_data
-                gdp_prd.columns = ['gdp']
-            # append gdp_prd to gdp's row
-            if 'FX' in gdp_data_path:
-                gdp_prd = gdp_prd / gdp.loc[gdp.index[-1] - pd.DateOffset(years=1):gdp.index[-1]].mean()
-                gdp = gdp / gdp.rolling(255).mean()
-            gdp = pd.concat([gdp, gdp_prd], axis=0)
-        gdp_roll = gdp.rolling(rolling).mean().dropna()
-        gdp_roll = gdp_roll.iloc[-5:]
-
-        keys = list(model.ucurve.keys())
-        gdp_rows = list(gdp_roll.iterrows())
-        ts = np.linspace(1, 365 * 2)
-        col_names = [f'{key}_{gdpidx.strftime("%Y-%m-%d")}' for key in keys for gdpidx, _ in gdp_rows]
-        arr = np.column_stack([
-            term_spread_now(ts, gdp.values, *model.ucurve[key]['popt_af'])
-            for key in tqdm(keys, desc='build_gdp_scenario') for _, gdp in gdp_rows
-        ])
-        total_ts_pd = pd.DataFrame(arr, index=ts, columns=col_names)
-
-    else:
-        keys = list(model.ucurve.keys())
-        ts = np.linspace(1, 365 * 2)
-        arr = np.column_stack([
-            term_spread_now(ts, 0, *model.ucurve[key]['popt_af'])
-            for key in tqdm(keys, desc='build_gdp_scenario')
-        ])
-        total_ts_pd = pd.DataFrame(arr, index=ts, columns=keys)
+    keys = list(model.ucurve.keys())
+    ts = np.linspace(1, 365 * 2)
+    arr = np.column_stack([
+        term_spread_now(ts, 0, *model.ucurve[key]['popt_af'])
+        for key in tqdm(keys, desc='build_gdp_scenario')
+    ])
+    total_ts_pd = pd.DataFrame(arr, index=ts, columns=keys)
 
     return total_ts_pd

@@ -1,3 +1,4 @@
+import argparse
 import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -215,15 +216,29 @@ class DataDownloader:
                 pbar.update(1)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-sy', '--start_year', default=2026, type=int, help='Start year for EPS estimation')
+    parser.add_argument('-ey', '--end_year', default=2028, type=int, help='End year for EPS estimation')
+    parser.add_argument('-sq', '--start_quarter', default=1, type=int, help='Start quarter for EPS estimation')
+    parser.add_argument('-eq', '--end_quarter', default=4, type=int, help='End quarter for EPS estimation')
+
+    return parser.parse_args()
+
+
+
 if __name__ == '__main__':
     config = ConfigParser()
     config.read('D:/config.ini')
     app_key = config['main']['api_key']
 
+    args = parse_args()
+    print(f"Starting EPS data download from {args.start_year} Q{args.start_quarter} to {args.end_year} Q{args.end_quarter}")
+
     dl = DataDownloader()
     dl.open_session(app_key)
     dl.read_list('./data/us/list_total.csv')
-    dl.set_period('Q', 2026, 2028, startquarter=2, endquarter=3)
+    dl.set_period('Q', args.start_year, args.end_year, startquarter=args.start_quarter, endquarter=args.end_quarter)
     #dl.set_period('Y', 2024, 2026, startquarter=None, endquarter=None)
 
     dl.run(skip_existing=False)
