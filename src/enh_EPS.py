@@ -431,6 +431,8 @@ class Enhanced_EPS(object):
                 q_errors = grouped_errors.xs(Q, level=0)
                 # 현재 분석 중인 애널리스트(unique_securities)만 필터링
                 q_errors = q_errors[q_errors.index.isin(unique_securities)]
+                # ensure q_errors data type to float
+                q_errors = q_errors.astype(float)
 
                 if not q_errors.empty:
                     # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
@@ -566,7 +568,10 @@ class Enhanced_EPS(object):
 
         # 딕셔너리 스타일 구조 매핑으로 pd.concat 오버헤드 방지
         data = pd.DataFrame(index=agg_df.index)
-        data['Est'] = agg_df['W_E_ROE'] / agg_df['I_PrevError']
+        # if agg_df['I_PrevError'] == 0 or empty, set Est to EW to prevent division by zero
+        zero_mask = (agg_df['I_PrevError'] == 0) | (agg_df['I_PrevError'].isna())
+        safe_denom = agg_df['I_PrevError'].replace(0, np.nan)
+        data['Est'] = np.where(zero_mask, agg_df['E_ROE_o'], agg_df['W_E_ROE'] / safe_denom)
         data['EW'] = agg_df['E_ROE_o']
         data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
         data['EQBtw'] = np.round(agg_df['EQBtw'])
@@ -952,6 +957,8 @@ class Enhanced_EPS(object):
                 q_errors = grouped_errors.xs(Q, level=0)
                 # 현재 분석 중인 애널리스트(unique_securities)만 필터링
                 q_errors = q_errors[q_errors.index.isin(unique_securities)]
+                # ensure q_errors data type to float
+                q_errors = q_errors.astype(float)
 
                 if not q_errors.empty:
                     # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
@@ -1113,7 +1120,10 @@ class Enhanced_EPS(object):
 
         # 딕셔너리 스타일 구조 매핑으로 pd.concat 오버헤드 방지
         data = pd.DataFrame(index=agg_df.index)
-        data['Est'] = agg_df['W_E_ROE'] / agg_df['I_PrevError']
+        # if agg_df['I_PrevError'] == 0 or NaN, set Est to EW to prevent division by zero
+        zero_mask = (agg_df['I_PrevError'] == 0) | (agg_df['I_PrevError'].isna())
+        safe_denom = agg_df['I_PrevError'].replace(0, np.nan)
+        data['Est'] = np.where(zero_mask, agg_df['E_ROE_o'], agg_df['W_E_ROE'] / safe_denom)
         data['EW'] = agg_df['E_ROE_o']
         data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
         data['EQBtw'] = np.round(agg_df['EQBtw'])

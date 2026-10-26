@@ -69,11 +69,15 @@ class DataDownloader:
         self.down_list = down_list
 
     @staticmethod
-    def prev_period(period):
+    def prev_period(period, interim=True):
         if 'FQ' in period:
-            fy = int(period[-4:])
-            q = int(period[0])
-            return f'{q}FQ{fy-1}'
+            if interim:
+                fy = int(period[-4:])
+                q = int(period[0])
+                return f'{q}FQ{fy-1}'
+            else:
+                fy = int(period[-4:])
+                return f'{fy-1}'
         else:
             return str(int(period)-1)
 
@@ -107,6 +111,7 @@ class DataDownloader:
                     fy = fdate
                 fdate_m1 = self.prev_period(fdate)
                 fdate_m2 = self.prev_period(self.prev_period(fdate))
+                fdate_m2_fy = self.prev_period(self.prev_period(fdate), interim=False)
 
                 if fy > self.const['fy'].max():
                     fy_for_code = self.const.fy.max()
@@ -161,39 +166,49 @@ class DataDownloader:
                             {'SDate': edate.strftime('%Y-%m-%d'), 'Period': str(fdate_m1)}
                         ),
                         (
-                            ['TR.EPSActValue', 'TR.F.BVperShrIssue(InstrumentType=Primary)'],
+                            ['TR.EPSActValue'],
                             {'SDate': edate.strftime('%Y-%m-%d'), 'Period': str(fdate_m2)}
+                        ),
+                        (
+                            ['TR.F.BookValuePerShr'],
+                            {'SDate': edate.strftime('%Y-%m-%d'), 'Period': str(fdate_m2_fy)}
                         ),
                         (
                             ['TR.GuidanceDate'],
                             {'Frq': 'D', 'SDate': '1D', 'Period': str(fdate)}
                         ),
+                        (
+                            ['TR.SharesOutstanding'],
+                            {'SDate': '1D'}
+                        ),
                     ]
 
                     pbar.set_description(f'Downloading Sector, EPS data')
 
-                    with ThreadPoolExecutor(max_workers=4) as executor:
+                    with ThreadPoolExecutor(max_workers=6) as executor:
                         futures = [
                             executor.submit(self._fetch, fields, params, codes)
                             for fields, params in fetch_args
                         ]
                         results = [f.result() for f in futures]  # preserves order
 
-                    df_cross1, df_cross2, df_cross3, df_cross4 = results
+                    df_cross1, df_cross2, df_cross3, df_cross4, df_cross5, df_cross6 = results
 
-                    if not df_cross4.empty:
-                        df_cross4_min = df_cross4.groupby('Instrument')['Activation Date'].min()
+                    if not df_cross5.empty:
+                        df_cross5_min = df_cross5.groupby('Instrument')['Activation Date'].min()
                     else:
-                        df_cross4_min = pd.DataFrame(np.nan, index=codes, columns=['GuidanceDate'], dtype='datetime64[ns]')
+                        df_cross5_min = pd.DataFrame(np.nan, index=codes, columns=['GuidanceDate'], dtype='datetime64[ns]')
 
                     df_cross1 = df_cross1[~df_cross1.index.duplicated(keep='first')]
-                    df_cross1 = df_cross1.reindex(columns=['GICS Sub-Industry Code', 'Earnings Per Share - Actual'])
+                    df_cross1 = df_cross1.reindex(columns=df_cross1.columns)
                     df_cross2 = df_cross2[~df_cross2.index.duplicated(keep='first')]
-                    df_cross2 = df_cross2.reindex(columns=['Earnings Per Share - Actual'])
+                    df_cross2 = df_cross2.reindex(columns=df_cross2.columns)
                     df_cross3 = df_cross3[~df_cross3.index.duplicated(keep='first')]
-                    df_cross3 = df_cross3.reindex(columns=['Earnings Per Share - Actual', 'Book Value Per Share - Issue'])
-                    df_cross = pd.concat([df_cross1, df_cross2, df_cross3, df_cross4_min], axis=1)
-                    df_cross.columns = ['GICS', 'EPS', 'EPS_1Y', 'EPS_2Y', 'BPS', 'GuidanceDate']
+                    df_cross3 = df_cross3.reindex(columns=df_cross3.columns)
+                    df_cross4 = df_cross4[~df_cross4.index.duplicated(keep='first')]
+                    df_cross4 = df_cross4.reindex(columns=df_cross4.columns)
+                    df_cross = pd.concat([df_cross1, df_cross2, df_cross3, df_cross4, df_cross5_min, df_cross6], axis=1)
+                    df_cross.columns = ['GICS', 'EPS', 'EPS_1Y', 'EPS_2Y', 'BPS', 'GuidanceDate', 'SharesOutstanding']
 
                     df_tmp = df_tmp.join(df_cross, on='Instrument')
 
@@ -220,8 +235,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-sy', '--start_year', default=2026, type=int, help='Start year for EPS estimation')
     parser.add_argument('-ey', '--end_year', default=2028, type=int, help='End year for EPS estimation')
-    parser.add_argument('-sq', '--start_quarter', default=1, type=int, help='Start quarter for EPS estimation')
-    parser.add_argument('-eq', '--end_quarter', default=4, type=int, help='End quarter for EPS estimation')
+    parser.add_argument('-sq', '--start_quarter', default=3, type=int, help='Start quarter for EPS estimation')
+    parser.add_argument('-eq', '--end_quarter', default=2, type=int, help='End quarter for EPS estimation')
 
     return parser.parse_args()
 
@@ -237,8 +252,7 @@ if __name__ == '__main__':
 
     dl = DataDownloader()
     dl.open_session(app_key)
-    dl.read_list('./data/us/list_total.csv')
+    dl.read_list('./data/us/list_part.csv')
     dl.set_period('Q', args.start_year, args.end_year, startquarter=args.start_quarter, endquarter=args.end_quarter)
-    #dl.set_period('Y', 2024, 2026, startquarter=None, endquarter=None)
 
     dl.run(skip_existing=False)

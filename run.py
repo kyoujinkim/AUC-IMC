@@ -140,9 +140,10 @@ def parse_args():
     parser.add_argument('-rc', '--reuse_cache', default=False, action='store_true', help='Whether to reuse cache data')
     parser.add_argument('-rr', '--reuse_result', default=False, action='store_true', help='Whether to reuse result data')
     parser.add_argument('-d', '--prddate', default=(dt.datetime.today()).strftime('%Y-%m-%d'), help='Prediction date in YYYY-MM-DD format')
-    parser.add_argument('-s', '--setting', default='KR_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
+    parser.add_argument('-s', '--setting', default='US_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
     parser.add_argument('-qb', '--q-basis', default='CQBtw', choices=['QBtw','CQBtw'], help='Basis for quarterly data')
     parser.add_argument('-q', '--quarter', default='3Q26AS', help='Quarter for quarterly data(e.g. 2Q26AS)')
+    parser.add_argument('--px_overlay', default=False, action='store_true', help='Append experimental PX_* columns (expected reaction vs. already-known signals, see src/price_adjust.py)')
 
     return parser.parse_args()
 
@@ -200,7 +201,8 @@ if __name__ == '__main__':
 
     with pd.ExcelFile(f'data/{country}/infos.xlsx') as xls:
         sector_name = pd.read_excel(xls, sheet_name='industry_map', dtype=str).set_index('Code')
-        shares = pd.read_excel(xls, sheet_name='share', index_col=0).astype(float) * 1000
+        shares = pd.read_excel(xls, sheet_name='share', index_col=0)
+        shares = shares.apply(pd.to_numeric, errors='coerce').bfill() * 1000
         comp_name = pd.read_excel(xls, sheet_name='name', index_col=0).astype(str)
     shares = shares[pd.to_numeric(shares.iloc[-1,:], errors='coerce').dropna().index]
     shares.columns = [code.split('(')[0] for code in shares.columns]
@@ -319,9 +321,13 @@ if __name__ == '__main__':
         result['LSector'] = result['Sector'].str[:sector_len]
 
         # get data by Code and PeriodEndDate
-        result['shares'] = result.apply(lambda x:get_shares(x, shares=shares), axis=1)
+        shares_by_code = train.sort_values('Date').groupby('Code')['SharesOutstanding'].last()
+        result['shares'] = result['Code'].map(shares_by_code)
         result['name'] = result.apply(lambda x: comp_name.loc[x.Code] if x.Code in comp_name.index else np.nan, axis=1)
         result = result.sort_values(['Code','FY',eq_basis,q_basis])
+        if args.px_overlay and period == 'Q':
+            from src.price_adjust import add_px_overlay
+            result = add_px_overlay(result, train, prddate, q_basis).sort_values(['Code','FY',eq_basis,q_basis])
         # data 저장
         result.groupby(['Code','FY',eq_basis]).first().reset_index().sort_values(['Code','FY',eq_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{period}_{prddate}.csv', encoding='utf-8-sig')
 

@@ -2,10 +2,10 @@ import numpy as np
 import pandas as pd
 import sys
 
-abs_path = 'D:/Factor_DB/us'
+abs_path = r'C:\Users\NHWM\Factor_DB'
 
-mktval = pd.read_parquet(f'./amktcap.parquet', engine='pyarrow')
-listequ = pd.read_parquet(f'D:/Factor_DB/members/master_RAY.parquet', engine='pyarrow')
+mktval = pd.read_parquet(f'{abs_path}/amktcap.parquet', engine='pyarrow')
+listequ = pd.read_parquet(f'{abs_path}/members/master_RAY.parquet', engine='pyarrow')
 
 list_total = []
 

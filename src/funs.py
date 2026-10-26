@@ -281,6 +281,19 @@ def build_data(path: str = './data/consenlist/*.csv'
         df['FY'] = df.Year.astype(str) + 'AS'
         df['Q'] = '4Q'
 
+    # adjust stock split
+    last_shares_map = df.sort_values('Date').dropna(subset=['SharesOutstanding']).groupby('Code')[['SharesOutstanding']].last()
+    df['SplitRatio'] = df['SharesOutstanding'] / df['Code'].map(last_shares_map['SharesOutstanding'])
+    # if SplitRatio is na, fill with 1
+    df['SplitRatio'] = df['SplitRatio'].fillna(1)
+
+    # adjust BPS and EPS with SplitRatio
+    df['BPS'] = df['BPS'] / df['SplitRatio']
+    df['E_EPS'] = df['E_EPS'] / df['SplitRatio']
+    df['A_EPS'] = df['A_EPS'] / df['SplitRatio']
+    df['EPS_1Y'] = df['EPS_1Y'] / df['SplitRatio']
+    df['EPS_2Y'] = df['EPS_2Y'] / df['SplitRatio']
+
     df['Security'] = df.Security.replace(r'\([^)]*\)','', regex=True)
     df['FilingDeadline'] = df.PeriodEndDate - MonthEnd(9)
     df['A_EPS_1'] = np.where(df['Date'] < df['FilingDeadline'], df['EPS_2Y'], df['EPS_1Y'])
@@ -293,7 +306,6 @@ def build_data(path: str = './data/consenlist/*.csv'
     # if sector is na, fill with unique_sector_map
     df['Sector'] = df['Sector'].fillna(df['Code'].map(unique_sector_map['Sector'])).astype(str)
     df['SectorClass'] = df.Sector.str[:sector_len]
-    date_max = df.Date.max()
 
     # fill missed BPS data with previous fiscal year's BPS
     df['prev_FY'] = df['FY'].apply(lambda x: shift_period(x, lag=1))
