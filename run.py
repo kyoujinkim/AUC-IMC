@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from src.funs import build_data, build_gdp_scenario, merged_ts, filter_guided_stock, safe_read_csv, \
     generate_financial_periods
 from src.enh_EPS import Enhanced_EPS
+from src.signals import add_surprise_hist8, add_rev_gap, add_dispersion, add_bold_revisions
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -33,7 +34,9 @@ def get_sector_growth_rate(x, est_name='earning_Est', act_name='earning_1Y', cap
         return None
 
 def groupby_func(df, cols):
-    result = df.groupby(cols)[['Est', 'EW', 'EW_prev', 'EPS_G', 'EPS_EW_G', 'EPS_G_bld', 'EPS_EW_G_bld']].median()
+    result = df.groupby(cols)[['Est', 'EW', 'EW_prev', 'EPS_G', 'EPS_EW_G', 'EPS_G_bld', 'EPS_EW_G_bld',
+                                 'Surprise_Hist8', 'RevGap_1to3Q',
+                                 'Disp_ROE', 'Disp_Chg90', 'Bold_Net', 'Bold_Gap']].median()
     result_total = df.groupby(cols)[['earning_Est', 'earning_EW', 'earning_Est_bld', 'earning_EW_bld', 'earning_1Y', 'earning_1Y_caption', 'earning_1Y_EW',
                                      'earning_1Y_EW_caption']].sum()
     result['earning_total'] = result_total['earning_Est']
@@ -143,6 +146,9 @@ def parse_args():
     parser.add_argument('-s', '--setting', default='US_Q', choices=['KR_Q','US_Q','KR_Y','US_Y'], help='Setting for country and period, e.g. KR_Q for Korea Quarterly, US_Y for US Yearly')
     parser.add_argument('-qb', '--q-basis', default='CQBtw', choices=['QBtw','CQBtw'], help='Basis for quarterly data')
     parser.add_argument('-q', '--quarter', default='3Q26AS', help='Quarter for quarterly data(e.g. 2Q26AS)')
+    parser.add_argument('--n-fy', dest='n_fy', type=int, default=4, help='number of quarters to estimate from --quarter (default 4; 1 = target quarter only, for backtests)')
+    parser.add_argument('--outdir', default=None, help='where to write model CSVs, coeff.csv, total_ts.csv and ucurve.json (default ./result/<country>); use a separate folder for historical runs')
+    parser.add_argument('--pit', default=False, action='store_true', help='point-in-time: blank actuals (A_EPS) of quarters not yet reported at prddate (period end + 45 days, 4Q 90 days), for historical runs')
     parser.add_argument('--px_overlay', default=False, action='store_true', help='Append experimental PX_* columns (expected reaction vs. already-known signals, see src/price_adjust.py)')
 
     return parser.parse_args()
@@ -173,6 +179,10 @@ if __name__ == '__main__':
     else:
         period = 'Q'
         prdFY, curveFY = generate_financial_periods(args.quarter)
+        if args.n_fy < len(prdFY):
+            drop = prdFY[args.n_fy:]
+            prdFY = prdFY[:args.n_fy]
+            curveFY = [f for f in curveFY if f not in drop]
         model_name = 'mixed_model'
 
     if country == 'us':
@@ -215,10 +225,21 @@ if __name__ == '__main__':
 
     # make some changes(sector classification, prediction date) to the train data
     train = train[train.Date <= prddate]
+    outdir = args.outdir or f'./result/{country}'
+    os.makedirs(outdir, exist_ok=True)
+    if args.pit:
+        # build_data fills A_EPS from the latest file onto every row, so a historical run would otherwise see the
+        # actuals of quarters that were not reported yet at prddate
+        from src.signals import REPORT_LAG, DEFAULT_LAG
+        known_at = train.PeriodEndDate + train.Q.map(REPORT_LAG).fillna(DEFAULT_LAG)
+        unknown = known_at > pd.Timestamp(prddate)
+        train = train.copy()
+        train.loc[unknown, ['A_EPS', 'A_ROE', 'Error']] = np.nan
+        print(f'[pit] blanked actuals on {unknown.sum():,} rows ({train.loc[unknown, "FY"].nunique()} FY) not reported by {prddate}')
 
     model = Enhanced_EPS(q_basis=q_basis)
     model.set_data(train)
-    model.calc_ucurve(country, curveFY, train, reuse=reuse_ucurve)
+    model.calc_ucurve(country, curveFY, train, reuse=reuse_ucurve, save_dir=outdir)
 
     if calc_est:
         # step1: save IMC and EW Enhanced EPS to csv
@@ -295,6 +316,17 @@ if __name__ == '__main__':
         # 현분기 실적 전망치 제작
         result['EPS_Est'] = result.Est * result.BPS
         result['EPS_EW'] = result.EW * result.BPS
+        # 과거 8분기 서프라이즈 이력, 최근 1~3분기 모델-컨센서스 ROE 변화 차이,
+        # 추정치 분산, 비-허딩(Bold) 수정 방향 (분기 실행만)
+        if period == 'Q':
+            result = add_surprise_hist8(result, train, prddate, q_basis)
+            result = add_rev_gap(result, q_basis)
+            result = add_dispersion(result, train, prddate, q_basis)
+            result = add_bold_revisions(result, train, prddate, q_basis)
+        else:
+            for col in ['Surprise_Hist8', 'RevGap_1to3Q', 'Disp_ROE', 'Disp_N', 'Disp_Chg90',
+                        'Rev_N', 'Bold_N', 'Bold_Net', 'Bold_Gap']:
+                result[col] = np.nan
         result['EPS_Est_bld'] = result.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x[q_basis] == 0) else x.Est * x.BPS, axis=1)
         result['EPS_EW_bld'] = result.apply(lambda x: x.EPS_Actual if (~pd.isna(x.EPS_Actual)) & (x[q_basis] == 0) else x.EW * x.BPS, axis=1)
         # get min EQBtw's EPS estimation
@@ -329,16 +361,16 @@ if __name__ == '__main__':
             from src.price_adjust import add_px_overlay
             result = add_px_overlay(result, train, prddate, q_basis).sort_values(['Code','FY',eq_basis,q_basis])
         # data 저장
-        result.groupby(['Code','FY',eq_basis]).first().reset_index().sort_values(['Code','FY',eq_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{period}_{prddate}.csv', encoding='utf-8-sig')
+        result.groupby(['Code','FY',eq_basis]).first().reset_index().sort_values(['Code','FY',eq_basis], ascending=[True,True,False]).to_csv(f'{outdir}/{model_name}_{period}_{prddate}.csv', encoding='utf-8-sig')
 
         result_sector = groupby_sector(result, sector_name, eq_basis)
         #result_sector.index = result_sector.index.astype(int)
-        result_sector.sort_values(['Sector','FY',eq_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{eq_basis}_{period}_sector_{prddate}.csv', encoding='utf-8-sig')
+        result_sector.sort_values(['Sector','FY',eq_basis], ascending=[True,True,False]).to_csv(f'{outdir}/{model_name}_{eq_basis}_{period}_sector_{prddate}.csv', encoding='utf-8-sig')
 
         # 최근 QBtw에 대한 snapshot 형태 data 제작
         result_snapshot = result.reset_index().set_index(['Code', q_basis]).loc[result.groupby('Code')[q_basis].min().reset_index().set_index(['Code',q_basis]).index]
         result_sector = groupby_sector(result_snapshot, sector_name, q_basis)
-        result_sector.sort_values(['Sector','FY',q_basis], ascending=[True,True,False]).to_csv(f'./result/{country}/{model_name}_{q_basis}_{period}_{prddate}.csv', encoding='utf-8-sig')
+        result_sector.sort_values(['Sector','FY',q_basis], ascending=[True,True,False]).to_csv(f'{outdir}/{model_name}_{q_basis}_{period}_{prddate}.csv', encoding='utf-8-sig')
 
         print('Step1 Finished')
 
@@ -346,7 +378,7 @@ if __name__ == '__main__':
 
         # step2: save total term spread by gdp and time delta to csv
         total_ts_pd = build_gdp_scenario(model)
-        total_ts_pd.to_csv(f'./result/{country}/total_ts.csv', encoding='utf-8-sig')
+        total_ts_pd.to_csv(f'{outdir}/total_ts.csv', encoding='utf-8-sig')
 
         print('Step2 Finished')
 
@@ -355,5 +387,5 @@ if __name__ == '__main__':
         ucurve_df = ucurve_df.explode(['popt_bf', 'popt_af'])
         ucurve_df['coeff'] = ['b0', 'c', 'b1', 'b2', 'lam'] * (len(ucurve_df) // 5)
         ucurve_df = ucurve_df.set_index([ucurve_df.index, 'coeff'])
-        ucurve_df.unstack(level=1).to_csv(f'./result/{country}/coeff.csv', encoding='utf-8-sig')
+        ucurve_df.unstack(level=1).to_csv(f'{outdir}/coeff.csv', encoding='utf-8-sig')
         print('Step3 Finished')

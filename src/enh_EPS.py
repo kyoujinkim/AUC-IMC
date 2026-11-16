@@ -12,6 +12,66 @@ from src.funs import *
 import warnings
 warnings.filterwarnings('ignore')
 
+# Past forecasts are matched to current ones by horizon to the report's own period end (QBtw).
+# CQBtw counts quarters back from today, so it never lines up with past years' reports.
+HQ = 'QBtw'
+
+
+# Bump when model-selection logic changes so cached best-model picks from older logic are not reused.
+BESTMODEL_VERSION = 'v2'
+
+
+def latest_per_broker(df, *keys):
+    """Keep each broker's latest estimate within a bucket (consensus = one vote per broker)."""
+    return df.sort_values('Date').drop_duplicates(subset=['Security', *keys], keep='last')
+
+
+def hist_per_broker(hist):
+    """Same one-vote-per-broker rule for past periods: latest estimate per (period, broker, horizon)."""
+    return latest_per_broker(hist, 'UniqueSymbol', HQ).copy()
+
+
+def adp_spread(df, popt_bf, popt_af):
+    """Horizon bias from the fitted term-spread curve, per row (same rule the _adp models apply)."""
+    mask_bf = (df['Date'] <= df['CutDate']).values
+    dbtw = df['DBtw'].values.astype(float)
+    out = np.zeros(len(df))
+    if mask_bf.any():
+        out[mask_bf] = term_spread(dbtw[mask_bf], *popt_bf)
+    if (~mask_bf).any():
+        out[~mask_bf] = term_spread(dbtw[~mask_bf], *popt_af)
+    return pd.Series(np.nan_to_num(out), index=df.index)
+
+
+def hist_spread(hist, ucurve, sector, popt_bf, popt_af):
+    """Term-spread bias of past estimates, each past FY with its own fitted curve (current curve if none)."""
+    out = pd.Series(0.0, index=hist.index)
+    pos = np.arange(len(hist))
+    for fy, idx in pd.Series(pos).groupby(hist['FY'].values).groups.items():
+        popt = ucurve.get(str(sector) + str(fy))
+        if popt is None:
+            bf, af = popt_bf, popt_af
+        else:
+            bf = np.asarray(popt['popt_bf'], dtype=np.float32)
+            af = np.asarray(popt['popt_af'], dtype=np.float32)
+        rows = pos[np.asarray(idx)]
+        out.iloc[rows] = adp_spread(hist.iloc[rows], bf, af).values
+    return out
+
+
+def lookup_prev_error(df_Q, grouped_errors):
+    """Each row's broker error in past years at the row's own horizon (NaN if none)."""
+    keys = pd.MultiIndex.from_arrays([df_Q[HQ].values, df_Q['Security'].values])
+    return pd.Series(grouped_errors.reindex(keys).values, index=df_Q.index, dtype=float)
+
+
+
+def _max_workers():
+    # SC_MAX_WORKERS caps the worker processes (each holds a copy of the train data); default cpu_count - 1
+    try:
+        return max(1, int(os.environ.get('SC_MAX_WORKERS', '')))
+    except ValueError:
+        return max(1, (os.cpu_count() or 2) - 1)
 
 class Enhanced_EPS(object):
     def __init__(self, q_basis='QBtw'):
@@ -32,47 +92,49 @@ class Enhanced_EPS(object):
         self.train = train
 
     def __save_memory__(self):
-        datadf = self.train
-        datapk = pickle.dumps(datadf)
-        # Create shared memory
-        shm_train = SharedMemory(create=True, size=len(datapk))
-        setattr(self, 'data', shm_train)
-
-        # Create a NumPy array from shared memory buffer
-        buf_array = np.frombuffer(shm_train.buf, dtype=np.uint8)
-        #setattr(self, path + '_buf', buf_array)
-
-        # Copy serialized data into shared memory
-        buf_array[:] = np.frombuffer(datapk, dtype=np.uint8)
-
-        ucurve = self.ucurve
-        ucurvepk = pickle.dumps(ucurve)
-        # Create shared memory
+        # Only the ucurve goes to shared memory. The train data is no longer shared: each task receives its own
+        # company's slice (see __code_slices__), so a full copy here would only cost memory.
+        self.shm_train = None
+        ucurvepk = pickle.dumps(self.ucurve)
         shm_ucurve = SharedMemory(create=True, size=len(ucurvepk))
-        setattr(self, 'data_uc', shm_ucurve)
-
-        # Create a NumPy array from shared memory buffer
-        buf_array_uc = np.frombuffer(shm_ucurve.buf, dtype=np.uint8)
-        #setattr(self, path + '_buf', buf_array)
-
-        # Copy serialized data into shared memory
-        buf_array_uc[:] = np.frombuffer(ucurvepk, dtype=np.uint8)
-
-        del buf_array, buf_array_uc
-
-        self.shm_train = shm_train.name
+        shm_ucurve.buf[:len(ucurvepk)] = ucurvepk
+        self.data_uc = shm_ucurve
         self.shm_ucurve = shm_ucurve.name
-
         return True
+
+    def __release_memory__(self):
+        # The creating (main) process frees the block once, after every worker task has finished.
+        # Workers only close() their handle: on POSIX unlink() removes the name, so a later task could no longer
+        # attach; on Windows unlink() is a no-op and the block lives while any handle is open.
+        shm = getattr(self, 'data_uc', None)
+        if shm is not None:
+            shm.close()
+            shm.unlink()
+            self.data_uc = None
+
+    def __code_slices__(self, symbols):
+        # every model reads only its own company's rows (UniqueSymbol == symbol, or Code == code for the error
+        # history), so each task gets that company's slice instead of unpickling the whole train set
+        codes = {sym[:-6] for sym in symbols}
+        sub = self.train[self.train['Code'].isin(codes)]
+        return {code: g for code, g in sub.groupby('Code', sort=False)}
 
     @staticmethod
     def __load_memory__(name):
-        # Retrieve data from shared memory (for validation)
-        shm = SharedMemory(name=name)  # Attach to existing shared memory
-        datadfex = pickle.loads(shm.buf[:])
-        # Close shared memory
-        shm.close()# Corrected syntax
-        shm.unlink()
+        if isinstance(name, pd.DataFrame):        # per-company slice passed directly (see __code_slices__)
+            return name
+        # Attach to the block created by the main process, copy the object out and detach.
+        # No unlink() here: the main process owns the block and frees it in __release_memory__.
+        shm = SharedMemory(name=name)
+        if os.name == 'posix':
+            # Python < 3.13 registers attached blocks with the resource tracker, which would unlink them when
+            # this worker exits; the main process is the owner, so take it off the tracker.
+            from multiprocessing import resource_tracker
+            resource_tracker.unregister(shm._name, 'shared_memory')
+        try:
+            datadfex = pickle.loads(bytes(shm.buf))
+        finally:
+            shm.close()
 
         return datadfex
 
@@ -85,7 +147,7 @@ class Enhanced_EPS(object):
 
         return df[df[codecol].isin(df_list)]
 
-    def calc_ucurve(self, country, prdFY, train, reuse:bool=False):
+    def calc_ucurve(self, country, prdFY, train, reuse:bool=False, save_dir=None):
         if reuse:
             self.ucurve = pd.read_json(f'result/{country}/ucurve.json').T.to_dict(orient='index')
             return True
@@ -98,11 +160,11 @@ class Enhanced_EPS(object):
         def _fit(table):
             return str(table[0]) + str(table[1]), term_spread_adj(*table, train=train)
 
-        with ThreadPoolExecutor(max_workers=os.cpu_count()) as pool:
+        with ThreadPoolExecutor(max_workers=_max_workers() + 1) as pool:
             for key, val in tqdm(pool.map(_fit, listoftable), total=len(listoftable), desc='calc_ucurve'):
                 self.ucurve[key] = val
 
-        pd.DataFrame(self.ucurve).to_json(f'result/{country}/ucurve.json')
+        pd.DataFrame(self.ucurve).to_json(f'{save_dir or "result/" + country}/ucurve.json')
 
         return True
 
@@ -137,10 +199,16 @@ class Enhanced_EPS(object):
                 return [best, sym, depth]
 
     def calc_mixed_model(self, UniqueSymbol:List, model_list:List, country:str):
+        try:
+            return self._calc_mixed_model_impl(UniqueSymbol, model_list, country)
+        finally:
+            self.__release_memory__()
+
+    def _calc_mixed_model_impl(self, UniqueSymbol:List, model_list:List, country:str):
         if len(UniqueSymbol)==0:
             return pd.DataFrame()
 
-        bestmodel_path = f'result/{country}/bestmodel_history/bestmodel.json'
+        bestmodel_path = f'result/{country}/bestmodel_history/bestmodel_{BESTMODEL_VERSION}.json'
         if os.path.exists(bestmodel_path):
             with open(bestmodel_path, 'r') as f:
                 bestmodel = json.load(f)
@@ -176,15 +244,21 @@ class Enhanced_EPS(object):
 
         # get pre error of each model
         if len(ncal_presym) > 0:
-            multiproclist = list(product(ncal_presym, model_list, [self.shm_train], [self.shm_ucurve], [self.q_basis]))
-            pre_result = process_map(Enhanced_EPS.__calc__, multiproclist, max_workers=os.cpu_count()-1)
+            slices = self.__code_slices__(ncal_presym)
+            empty = self.train.iloc[0:0]
+            multiproclist = [(sym, m, slices.get(sym[:-6], empty), self.shm_ucurve, self.q_basis)
+                             for sym, m in product(ncal_presym, model_list)]
+            pre_result = process_map(Enhanced_EPS.__calc__, multiproclist, max_workers=_max_workers())
             pre_result = pd.concat(pre_result)
             pre_result.to_parquet(f'result/{country}/bestmodel_history/pre_result.parquet', engine='pyarrow', index=False)
 
-            pre_result = pre_result[~((pre_result.Sector.str[:2]=='35') & (pre_result.model.str[-3:]=='adp'))]
+            # health care(35): no _adp. KR sector codes carry a 'G' prefix (G352020), so strip it first
+            pre_result = pre_result[~((pre_result.Sector.astype(str).str.lstrip('G').str[:2]=='35') & (pre_result.model.str[-3:]=='adp'))]
             pre_result['MAFE'] = (pre_result['Est'] - (pre_result['EPS_Actual'] / pre_result['BPS'])).abs()
             data_group = pre_result.groupby(['Code', 'model', 'FY'])[['MAFE', 'EPS_Actual']].mean().reset_index()
-            data_group_best = data_group.groupby(['Code', 'FY']).MAFE.idxmin().dropna()
+            # on a tie (a model that falls back to EW / EW_adp), keep the EW baseline instead of the alphabetically first model
+            data_group['MAFE_rank'] = data_group['MAFE'] + np.where(data_group['model'].isin(['EW', 'EW_adp']), 0.0, 1e-12)
+            data_group_best = data_group.groupby(['Code', 'FY']).MAFE_rank.idxmin().dropna()
             data_group_best = pd.DataFrame({'model': data_group.model[data_group_best].values,'EPS_Actual': data_group.EPS_Actual[data_group_best].isna().values}, index=data_group_best.index).reset_index()
 
             for _, row in data_group_best.iterrows():
@@ -206,13 +280,21 @@ class Enhanced_EPS(object):
 
         # calculate with best model
         symwithbm = []
+        slices = self.__code_slices__(UniqueSymbol)
+        empty = self.train.iloc[0:0]
         for sym in UniqueSymbol:
-            symwithbm.append([sym, bestmodel.get(sym, 'EW'), self.shm_train, self.shm_ucurve, self.q_basis])
-        result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
+            symwithbm.append([sym, bestmodel.get(sym, 'EW'), slices.get(sym[:-6], empty), self.shm_ucurve, self.q_basis])
+        result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=_max_workers())
 
         return pd.concat(result)
 
     def calc_model(self, UniqueSymbol:List, model_name:str):
+        try:
+            return self._calc_model_impl(UniqueSymbol, model_name)
+        finally:
+            self.__release_memory__()
+
+    def _calc_model_impl(self, UniqueSymbol:List, model_name:str):
         if len(UniqueSymbol)==0:
             return pd.DataFrame()
 
@@ -220,9 +302,11 @@ class Enhanced_EPS(object):
         _ = self.__save_memory__()
 
         symwithbm = []
+        slices = self.__code_slices__(UniqueSymbol)
+        empty = self.train.iloc[0:0]
         for sym in UniqueSymbol:
-            symwithbm.append([sym, model_name, self.shm_train, self.shm_ucurve, self.q_basis])
-        result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=os.cpu_count()-1)
+            symwithbm.append([sym, model_name, slices.get(sym[:-6], empty), self.shm_ucurve, self.q_basis])
+        result = process_map(Enhanced_EPS.__calc__, symwithbm, max_workers=_max_workers())
 
         return pd.concat(result)
 
@@ -262,7 +346,8 @@ class Enhanced_EPS(object):
     @staticmethod
     def __fill_missing_est__(df, q_basis):
         df = df.sort_values('Date')
-        df_pivot = pd.pivot_table(df, values='E_EPS', columns=['Security'], index=[q_basis], aggfunc='last').ffill()
+        # no ffill here: a gap must stay NaN so it can be filled from the broker's estimate one bucket older
+        df_pivot = pd.pivot_table(df, values='E_EPS', columns=['Security'], index=[q_basis], aggfunc='last')
         # 최솟값부터 최댓값까지 빠짐없이 있어야 할 풀 세트 생성: {1, 2, 3, 4, 5}
         full_set = set(range(df_pivot.index[0], df_pivot.index[-1] + 1))
         missing_elements = full_set - set(df_pivot.index)
@@ -270,7 +355,7 @@ class Enhanced_EPS(object):
         # fill up missing rows
         for me in missing_elements:
             df_pivot.loc[me] = np.nan
-        df_pivot = df_pivot.sort_index().ffill()
+        df_pivot = df_pivot.sort_index()
 
         df_ravel = df_pivot.melt(ignore_index=False).reset_index()
         df_ravel = df_ravel[df_ravel.value.isna()]
@@ -350,7 +435,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -395,7 +480,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -412,36 +497,29 @@ class Enhanced_EPS(object):
                            (train['Year'] <= year_max)]
 
         # 미리 중복 제거 및 절댓값 에러 컬럼 생성 (벡터화 준비)
-        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train = hist_per_broker(hist_train)
         hist_train['abs_Error'] = hist_train['Error'].abs()
 
         # 모든 Q와 Security별 평균 에러율을 한 번에 계산
-        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
-        available_Qs = set(grouped_errors.index.get_level_values(0))
+        grouped_errors = hist_train.groupby([HQ, 'Security'])['abs_Error'].mean()
 
-        unique_securities = df['Security'].unique()
         Q_result = []
 
         # Q에 대해서만 루프 수행 (Security 루프는 완전히 증발함)
         for Q in df[q_basis].unique():
             df_Q = df[df[q_basis] == Q]
 
-            if Q in available_Qs:
-                # 해당 Q의 애널리스트 에러 정보 가져오기
-                q_errors = grouped_errors.xs(Q, level=0)
-                # 현재 분석 중인 애널리스트(unique_securities)만 필터링
-                q_errors = q_errors[q_errors.index.isin(unique_securities)]
-                # ensure q_errors data type to float
-                q_errors = q_errors.astype(float)
+            # 각 행의 애널리스트 과거 에러를 그 행의 QBtw(발표 기준 거리)로 조회
+            prev_err = lookup_prev_error(df_Q, grouped_errors)
+            if prev_err.notna().any():
+                q_errors = prev_err.groupby(df_Q['Security']).mean().dropna()
+                # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
+                top_secs = q_errors.nsmallest(star_count).index
+                check_star_count = df_Q[df_Q['Security'].isin(top_secs)]
 
-                if not q_errors.empty:
-                    # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
-                    top_secs = q_errors.nsmallest(star_count).index
-                    check_star_count = df_Q[df_Q['Security'].isin(top_secs)]
-
-                    if len(check_star_count) >= 2:
-                        Q_result.append(check_star_count)
-                        continue
+                if len(check_star_count) >= 2:
+                    Q_result.append(check_star_count)
+                    continue
 
             # 데이터가 없거나 조건 미달 시 원본 유지
             Q_result.append(df_Q)
@@ -490,7 +568,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -505,11 +583,10 @@ class Enhanced_EPS(object):
                            (train['Year'] >= year_min) &
                            (train['Year'] <= year_max)]
 
-        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train = hist_per_broker(hist_train)
         hist_train['abs_Error'] = hist_train['Error'].abs()
 
-        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
-        available_Qs = set(grouped_errors.index.get_level_values(0))
+        grouped_errors = hist_train.groupby([HQ, 'Security'])['abs_Error'].mean()
 
         Q_result = []
 
@@ -517,23 +594,14 @@ class Enhanced_EPS(object):
         for Q in df[q_basis].unique():
             df_Q = df[df[q_basis] == Q].copy()
 
-            if Q in available_Qs:
-                # 해당 Q의 애널리스트별 평균 에러 추출 (Series 형태)
-                q_errors = grouped_errors.xs(Q, level=0)
+            # 각 행의 애널리스트 과거 에러를 그 행의 QBtw(발표 기준 거리)로 조회
+            df_Q['PrevError'] = lookup_prev_error(df_Q, grouped_errors)
+            # 과거 에러 데이터가 존재하는 Row들만 필터링
+            valid_df_Q = df_Q[df_Q['PrevError'].notna()].copy()
 
-                # 현재 데이터에 존재하는 애널리스트만 필터링
-                unique_securities = df_Q['Security'].unique()
-                q_errors = q_errors[q_errors.index.isin(unique_securities)]
-
-                if not q_errors.empty:
-                    # 과거 에러 데이터가 존재하는 Row들만 필터링
-                    valid_df_Q = df_Q[df_Q['Security'].isin(q_errors.index)].copy()
-
-                    if len(valid_df_Q) >= min_count:
-                        # 초성능 킬러 포인트: .apply() 대신 .map() 사용
-                        valid_df_Q['PrevError'] = valid_df_Q['Security'].map(q_errors)
-                        Q_result.append(valid_df_Q)
-                        continue
+            if len(valid_df_Q) >= min_count:
+                Q_result.append(valid_df_Q)
+                continue
 
             # 데이터가 없거나 기준 충족 못할 시 Fallback 처리
             df_Q['PrevError'] = 1.0
@@ -598,7 +666,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -620,7 +688,7 @@ class Enhanced_EPS(object):
 
         if not hist_train.empty:
             # 중복 제거
-            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+            hist_train = hist_per_broker(hist_train)
 
             # ----------------------------------------------------------------
             # OPTIMIZATION 2: LinearRegression 라이브러리를 대체하는 수학적 벡터화 (OLS)
@@ -630,7 +698,7 @@ class Enhanced_EPS(object):
             hist_train['X2'] = hist_train['E_ROE'] ** 2
 
             # 모든 Q에 대한 필요한 통계량을 단 한 번의 groupby로 집계
-            agg_hist = hist_train.groupby(q_basis).agg(
+            agg_hist = hist_train.groupby(HQ).agg(
                 sum_xy=('XY', 'sum'),
                 sum_x2=('X2', 'sum'),
                 unique_years=('Year', 'nunique')
@@ -639,13 +707,12 @@ class Enhanced_EPS(object):
             # 조건 검증 (데이터 개수 조건 및 분모가 0이 아닌지 체크)
             valid_mask = (agg_hist['unique_years'] >= min_count) & (agg_hist['sum_x2'] > 0)
 
-            # 기본값은 Slope=1, Intercept=0으로 세팅 후 유효한 값만 연산
+            # 기본값은 Slope=1 (절편 없는 OLS) 후 유효한 값만 연산
             agg_hist['Slope'] = 1.0
             agg_hist.loc[valid_mask, 'Slope'] = agg_hist.loc[valid_mask, 'sum_xy'] / agg_hist.loc[valid_mask, 'sum_x2']
-            agg_hist['Intercept'] = 0.0
 
             # 빠른 조회를 위해 딕셔너리로 변환
-            coeff_map = agg_hist[['Slope', 'Intercept']].to_dict('index')
+            coeff_map = agg_hist['Slope'].to_dict()
 
             # ----------------------------------------------------------------
             # OPTIMIZATION 3: 후반부 수많은 Groupby를 단 1번으로 일괄 집계
@@ -664,13 +731,13 @@ class Enhanced_EPS(object):
         # ----------------------------------------------------------------
         # OPTIMIZATION 4: apply(axis=1) 제거 및 고속 매핑 보정 연산
         # ----------------------------------------------------------------
-        # 각 Q에 맞는 Slope와 Intercept를 C-Level 속도로 매핑
-        slopes = agg_df.index.map(lambda q: coeff_map.get(q, {'Slope': 1.0})['Slope'])
-        intercepts = agg_df.index.map(lambda q: coeff_map.get(q, {'Intercept': 0.0})['Intercept'])
+        # 행마다 자기 QBtw의 기울기를 적용한 뒤 구간 평균 (한 구간 안에 QBtw가 두 개 섞일 수 있음)
+        row_slope = df[HQ].map(coeff_map).fillna(1.0).astype(float)
+        est_bam = (df['E_ROE'] * row_slope).groupby(df[q_basis]).mean()
 
-        # 결과 데이터프레임 구축 (BAM 보정 수식을 인라인 벡터 연산으로 처리)
+        # 결과 데이터프레임 구축 (절편 0, y = slope * x)
         data = pd.DataFrame(index=agg_df.index)
-        data['Est'] = agg_df['E_ROE'] * slopes + intercepts  # apply_bam 함수가 y = ax + b 구조일 때 기준
+        data['Est'] = est_bam.reindex(agg_df.index)
         data['EW'] = agg_df['E_ROE_o']
         data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
         data['EQBtw'] = np.round(agg_df['EQBtw'])
@@ -697,7 +764,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -723,7 +790,7 @@ class Enhanced_EPS(object):
         q_slope_map = {}
 
         if not hist_train.empty:
-            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+            hist_train = hist_per_broker(hist_train)
             hist_train['CoreAnalyst'] = hist_train['Analyst'].str.split(',').str[0]
             hist_train['SecAnl'] = hist_train['Security'] + hist_train['CoreAnalyst']
 
@@ -738,7 +805,7 @@ class Enhanced_EPS(object):
             hist_train['X2'] = hist_train['E_ROE'] ** 2
 
             # Q와 SecAnl 조합으로 단 한 번에 그룹 집계
-            s_agg = hist_train.groupby([q_basis, 'SecAnl']).agg(
+            s_agg = hist_train.groupby([HQ, 'SecAnl']).agg(
                 sum_xy=('XY', 'sum'),
                 sum_x2=('X2', 'sum'),
                 row_cnt=('XY', 'count'),
@@ -755,13 +822,13 @@ class Enhanced_EPS(object):
             # 1단계에서 계산된 Analyst Slope를 적용한 뒤 다시 OLS 수행
             # ----------------------------------------------------------------
             # MultiIndex 매핑을 통해 가중치 적용 (.apply 제거)
-            hist_train['S_Slope'] = hist_train.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+            hist_train['S_Slope'] = hist_train.set_index([HQ, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
             hist_train['E_ROE_adj'] = hist_train['E_ROE'] * hist_train['S_Slope']
 
             hist_train['XY_adj'] = hist_train['E_ROE_adj'] * hist_train['A_ROE']
             hist_train['X2_adj'] = hist_train['E_ROE_adj'] ** 2
 
-            q_agg = hist_train.groupby(q_basis).agg(
+            q_agg = hist_train.groupby(HQ).agg(
                 sum_xy_adj=('XY_adj', 'sum'),
                 sum_x2_adj=('X2_adj', 'sum'),
                 nyear_q=('Year', 'nunique')
@@ -776,8 +843,10 @@ class Enhanced_EPS(object):
             # OPTIMIZATION 4: 현재 예측 대상 데이터(df)에 보정치 초고속 적용
             # ----------------------------------------------------------------
             # 1단계: Analyst 레벨 보정 (.apply 대신 .map 사용)
-        df['S_Slope'] = df.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
-        df['E_ROE'] = df['E_ROE'] * df['S_Slope']
+        df['S_Slope'] = df.set_index([HQ, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+        # 2단계: Company 레벨 보정도 행마다 자기 QBtw의 기울기로 적용
+        df['Q_Slope'] = df[HQ].map(q_slope_map).fillna(1.0)
+        df['E_ROE'] = df['E_ROE'] * df['S_Slope'] * df['Q_Slope']
 
         # 후반부 모든 무거운 Groupby 연산을 단 1번으로 일괄 처리
         agg_df = df.groupby(q_basis).agg({
@@ -791,11 +860,8 @@ class Enhanced_EPS(object):
         if agg_df.empty:
             return pd.DataFrame()
 
-        # 2단계: Company 레벨 보정 (최종 데이터프레임 구축 과정에서 인라인 연산)
-        q_slopes = agg_df.index.map(lambda q: q_slope_map.get(q, 1.0))
-
         data = pd.DataFrame(index=agg_df.index)
-        data['Est'] = agg_df['E_ROE'] * q_slopes  # 별도의 apply_bam 함수 호출 없이 벡터 연산 처리
+        data['Est'] = agg_df['E_ROE']  # 1·2단계 보정이 행 단위로 이미 반영됨
         data['EW'] = agg_df['E_ROE_o']
         data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
         data['EQBtw'] = np.round(agg_df['EQBtw'])
@@ -821,7 +887,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -834,23 +900,8 @@ class Enhanced_EPS(object):
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        # ----------------------------------------------------------------
-        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
-        # ----------------------------------------------------------------
-        mask_bf = df['Date'] <= df['CutDate']
-        spread_series = pd.Series(0.0, index=df.index)
-
-        # Before CutDate 그룹 연산
-        if mask_bf.any():
-            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
-            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
-
-        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
-        if (~mask_bf).any():
-            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
-
-        # 보정치 차감 처리
-        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+        # term spread 보정 (과거 추정치와 동일한 adp_spread 규칙)
+        df['E_ROE'] = df['E_ROE'] - adp_spread(df, popt_bf, popt_af)
 
         # ----------------------------------------------------------------
         # OPTIMIZATION 2: 후반부 모든 무거운 Groupby를 단 1번으로 일괄 집계
@@ -896,7 +947,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -909,23 +960,8 @@ class Enhanced_EPS(object):
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        # ----------------------------------------------------------------
-        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
-        # ----------------------------------------------------------------
-        mask_bf = df['Date'] <= df['CutDate']
-        spread_series = pd.Series(0.0, index=df.index)
-
-        # Before CutDate 그룹 연산
-        if mask_bf.any():
-            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
-            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
-
-        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
-        if (~mask_bf).any():
-            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
-
-        # 보정치 차감 처리
-        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+        # term spread 보정 (과거 추정치와 동일한 adp_spread 규칙)
+        df['E_ROE'] = df['E_ROE'] - adp_spread(df, popt_bf, popt_af)
 
         target_code = df['Code'].iloc[0]
         target_year = int(df['Year'].iloc[0])
@@ -938,36 +974,31 @@ class Enhanced_EPS(object):
                            (train['Year'] <= year_max)]
 
         # 미리 중복 제거 및 절댓값 에러 컬럼 생성 (벡터화 준비)
-        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train = hist_per_broker(hist_train)
+        # 현재 추정치와 같은 기준: 과거 에러에도 term spread 보정을 적용
+        hist_train['Error'] = hist_train['Error'] - hist_spread(hist_train, ucurve, sector, popt_bf, popt_af)
         hist_train['abs_Error'] = hist_train['Error'].abs()
 
         # 모든 Q와 Security별 평균 에러율을 한 번에 계산
-        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
-        available_Qs = set(grouped_errors.index.get_level_values(0))
+        grouped_errors = hist_train.groupby([HQ, 'Security'])['abs_Error'].mean()
 
-        unique_securities = df['Security'].unique()
         Q_result = []
 
         # Q에 대해서만 루프 수행 (Security 루프는 완전히 증발함)
         for Q in df[q_basis].unique():
             df_Q = df[df[q_basis] == Q]
 
-            if Q in available_Qs:
-                # 해당 Q의 애널리스트 에러 정보 가져오기
-                q_errors = grouped_errors.xs(Q, level=0)
-                # 현재 분석 중인 애널리스트(unique_securities)만 필터링
-                q_errors = q_errors[q_errors.index.isin(unique_securities)]
-                # ensure q_errors data type to float
-                q_errors = q_errors.astype(float)
+            # 각 행의 애널리스트 과거 에러를 그 행의 QBtw(발표 기준 거리)로 조회
+            prev_err = lookup_prev_error(df_Q, grouped_errors)
+            if prev_err.notna().any():
+                q_errors = prev_err.groupby(df_Q['Security']).mean().dropna()
+                # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
+                top_secs = q_errors.nsmallest(star_count).index
+                check_star_count = df_Q[df_Q['Security'].isin(top_secs)]
 
-                if not q_errors.empty:
-                    # 상위 5명(star_count)의 애널리스트 추출 (nsmallest 활용)
-                    top_secs = q_errors.nsmallest(star_count).index
-                    check_star_count = df_Q[df_Q['Security'].isin(top_secs)]
-
-                    if len(check_star_count) >= 2:
-                        Q_result.append(check_star_count)
-                        continue
+                if len(check_star_count) >= 2:
+                    Q_result.append(check_star_count)
+                    continue
 
             # 데이터가 없거나 조건 미달 시 원본 유지
             Q_result.append(df_Q)
@@ -1017,7 +1048,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -1030,23 +1061,8 @@ class Enhanced_EPS(object):
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        # ----------------------------------------------------------------
-        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
-        # ----------------------------------------------------------------
-        mask_bf = df['Date'] <= df['CutDate']
-        spread_series = pd.Series(0.0, index=df.index)
-
-        # Before CutDate 그룹 연산
-        if mask_bf.any():
-            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
-            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
-
-        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
-        if (~mask_bf).any():
-            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
-
-        # 보정치 차감 처리
-        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+        # term spread 보정 (과거 추정치와 동일한 adp_spread 규칙)
+        df['E_ROE'] = df['E_ROE'] - adp_spread(df, popt_bf, popt_af)
 
         target_code = df['Code'].iloc[0]
         target_year = int(df['Year'].iloc[0])
@@ -1057,11 +1073,12 @@ class Enhanced_EPS(object):
                            (train['Year'] >= year_min) &
                            (train['Year'] <= year_max)]
 
-        hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+        hist_train = hist_per_broker(hist_train)
+        # 현재 추정치와 같은 기준: 과거 에러에도 term spread 보정을 적용
+        hist_train['Error'] = hist_train['Error'] - hist_spread(hist_train, ucurve, sector, popt_bf, popt_af)
         hist_train['abs_Error'] = hist_train['Error'].abs()
 
-        grouped_errors = hist_train.groupby([q_basis, 'Security'])['abs_Error'].mean()
-        available_Qs = set(grouped_errors.index.get_level_values(0))
+        grouped_errors = hist_train.groupby([HQ, 'Security'])['abs_Error'].mean()
 
         Q_result = []
 
@@ -1069,23 +1086,14 @@ class Enhanced_EPS(object):
         for Q in df[q_basis].unique():
             df_Q = df[df[q_basis] == Q].copy()
 
-            if Q in available_Qs:
-                # 해당 Q의 애널리스트별 평균 에러 추출 (Series 형태)
-                q_errors = grouped_errors.xs(Q, level=0)
+            # 각 행의 애널리스트 과거 에러를 그 행의 QBtw(발표 기준 거리)로 조회
+            df_Q['PrevError'] = lookup_prev_error(df_Q, grouped_errors)
+            # 과거 에러 데이터가 존재하는 Row들만 필터링
+            valid_df_Q = df_Q[df_Q['PrevError'].notna()].copy()
 
-                # 현재 데이터에 존재하는 애널리스트만 필터링
-                unique_securities = df_Q['Security'].unique()
-                q_errors = q_errors[q_errors.index.isin(unique_securities)]
-
-                if not q_errors.empty:
-                    # 과거 에러 데이터가 존재하는 Row들만 필터링
-                    valid_df_Q = df_Q[df_Q['Security'].isin(q_errors.index)].copy()
-
-                    if len(valid_df_Q) >= min_count:
-                        # 초성능 킬러 포인트: .apply() 대신 .map() 사용
-                        valid_df_Q['PrevError'] = valid_df_Q['Security'].map(q_errors)
-                        Q_result.append(valid_df_Q)
-                        continue
+            if len(valid_df_Q) >= min_count:
+                Q_result.append(valid_df_Q)
+                continue
 
             # 데이터가 없거나 기준 충족 못할 시 Fallback 처리
             df_Q['PrevError'] = 1.0
@@ -1151,7 +1159,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -1164,23 +1172,8 @@ class Enhanced_EPS(object):
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        # ----------------------------------------------------------------
-        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
-        # ----------------------------------------------------------------
-        mask_bf = df['Date'] <= df['CutDate']
-        spread_series = pd.Series(0.0, index=df.index)
-
-        # Before CutDate 그룹 연산
-        if mask_bf.any():
-            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
-            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
-
-        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
-        if (~mask_bf).any():
-            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
-
-        # 보정치 차감 처리
-        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+        # term spread 보정 (과거 추정치와 동일한 adp_spread 규칙)
+        df['E_ROE'] = df['E_ROE'] - adp_spread(df, popt_bf, popt_af)
 
         # ----------------------------------------------------------------
         # OPTIMIZATION 1: 과거 11개년 기록 단 한 번만 미리 도려내기
@@ -1198,7 +1191,9 @@ class Enhanced_EPS(object):
 
         if not hist_train.empty:
             # 중복 제거
-            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+            hist_train = hist_per_broker(hist_train)
+            # 현재 추정치와 같은 기준으로 맞추기 위해 과거 추정치에도 term spread 보정을 먼저 적용 (이중 보정 방지)
+            hist_train['E_ROE'] = hist_train['E_ROE'] - hist_spread(hist_train, ucurve, sector, popt_bf, popt_af)
 
             # ----------------------------------------------------------------
             # OPTIMIZATION 2: LinearRegression 라이브러리를 대체하는 수학적 벡터화 (OLS)
@@ -1208,7 +1203,7 @@ class Enhanced_EPS(object):
             hist_train['X2'] = hist_train['E_ROE'] ** 2
 
             # 모든 Q에 대한 필요한 통계량을 단 한 번의 groupby로 집계
-            agg_hist = hist_train.groupby(q_basis).agg(
+            agg_hist = hist_train.groupby(HQ).agg(
                 sum_xy=('XY', 'sum'),
                 sum_x2=('X2', 'sum'),
                 unique_years=('Year', 'nunique')
@@ -1217,13 +1212,12 @@ class Enhanced_EPS(object):
             # 조건 검증 (데이터 개수 조건 및 분모가 0이 아닌지 체크)
             valid_mask = (agg_hist['unique_years'] >= min_count) & (agg_hist['sum_x2'] > 0)
 
-            # 기본값은 Slope=1, Intercept=0으로 세팅 후 유효한 값만 연산
+            # 기본값은 Slope=1 (절편 없는 OLS) 후 유효한 값만 연산
             agg_hist['Slope'] = 1.0
             agg_hist.loc[valid_mask, 'Slope'] = agg_hist.loc[valid_mask, 'sum_xy'] / agg_hist.loc[valid_mask, 'sum_x2']
-            agg_hist['Intercept'] = 0.0
 
             # 빠른 조회를 위해 딕셔너리로 변환
-            coeff_map = agg_hist[['Slope', 'Intercept']].to_dict('index')
+            coeff_map = agg_hist['Slope'].to_dict()
 
             # ----------------------------------------------------------------
             # OPTIMIZATION 3: 후반부 수많은 Groupby를 단 1번으로 일괄 집계
@@ -1242,13 +1236,13 @@ class Enhanced_EPS(object):
         # ----------------------------------------------------------------
         # OPTIMIZATION 4: apply(axis=1) 제거 및 고속 매핑 보정 연산
         # ----------------------------------------------------------------
-        # 각 Q에 맞는 Slope와 Intercept를 C-Level 속도로 매핑
-        slopes = agg_df.index.map(lambda q: coeff_map.get(q, {'Slope': 1.0})['Slope'])
-        intercepts = agg_df.index.map(lambda q: coeff_map.get(q, {'Intercept': 0.0})['Intercept'])
+        # 행마다 자기 QBtw의 기울기를 적용한 뒤 구간 평균 (한 구간 안에 QBtw가 두 개 섞일 수 있음)
+        row_slope = df[HQ].map(coeff_map).fillna(1.0).astype(float)
+        est_bam = (df['E_ROE'] * row_slope).groupby(df[q_basis]).mean()
 
-        # 결과 데이터프레임 구축 (BAM 보정 수식을 인라인 벡터 연산으로 처리)
+        # 결과 데이터프레임 구축 (절편 0, y = slope * x)
         data = pd.DataFrame(index=agg_df.index)
-        data['Est'] = agg_df['E_ROE'] * slopes + intercepts  # apply_bam 함수가 y = ax + b 구조일 때 기준
+        data['Est'] = est_bam.reindex(agg_df.index)
         data['EW'] = agg_df['E_ROE_o']
         data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
         data['EQBtw'] = np.round(agg_df['EQBtw'])
@@ -1276,7 +1270,7 @@ class Enhanced_EPS(object):
         if df.empty:
             return pd.DataFrame()
 
-        df = df.drop_duplicates(subset=['E_ROE', 'Security', q_basis], keep='last')
+        df = latest_per_broker(df, q_basis)
         df['E_ROE_o'] = df['E_ROE'].copy()
 
         res = Enhanced_EPS.__fill_missing_est__(df, q_basis)
@@ -1291,23 +1285,8 @@ class Enhanced_EPS(object):
         popt_bf = np.asarray(popt['popt_bf'], dtype=np.float32)
         popt_af = np.asarray(popt['popt_af'], dtype=np.float32)
 
-        # ----------------------------------------------------------------
-        # OPTIMIZATION 1: 부울 마스킹을 통한 Before/After 분기 연산 최적화
-        # ----------------------------------------------------------------
-        mask_bf = df['Date'] <= df['CutDate']
-        spread_series = pd.Series(0.0, index=df.index)
-
-        # Before CutDate 그룹 연산
-        if mask_bf.any():
-            # 만약 term_spread가 벡터화를 지원한다면: term_spread(df[mask_bf], *popt_bf) 가 베스트
-            spread_series.loc[mask_bf] = df['DBtw'].loc[mask_bf].apply(lambda r: term_spread(r, *popt_bf))
-
-        # After CutDate 그룹 연산 (~ 연산자로 반대 타겟 지정)
-        if (~mask_bf).any():
-            spread_series.loc[~mask_bf] = df['DBtw'].loc[~mask_bf].apply(lambda r: term_spread(r, *popt_af))
-
-        # 보정치 차감 처리
-        df['E_ROE'] = df['E_ROE'] - spread_series.fillna(0)
+        # term spread 보정 (과거 추정치와 동일한 adp_spread 규칙)
+        df['E_ROE'] = df['E_ROE'] - adp_spread(df, popt_bf, popt_af)
 
         # ----------------------------------------------------------------
         # OPTIMIZATION 1: 과거 11개년 기록 단 한 번만 슬라이싱 및 필터링
@@ -1326,7 +1305,9 @@ class Enhanced_EPS(object):
         q_slope_map = {}
 
         if not hist_train.empty:
-            hist_train = hist_train.drop_duplicates(subset=['E_ROE', 'Security', 'Year', q_basis]).copy()
+            hist_train = hist_per_broker(hist_train)
+            # 현재 추정치와 같은 기준으로 맞추기 위해 과거 추정치에도 term spread 보정을 먼저 적용 (이중 보정 방지)
+            hist_train['E_ROE'] = hist_train['E_ROE'] - hist_spread(hist_train, ucurve, sector, popt_bf, popt_af)
             hist_train['CoreAnalyst'] = hist_train['Analyst'].str.split(',').str[0]
             hist_train['SecAnl'] = hist_train['Security'] + hist_train['CoreAnalyst']
 
@@ -1341,7 +1322,7 @@ class Enhanced_EPS(object):
             hist_train['X2'] = hist_train['E_ROE'] ** 2
 
             # Q와 SecAnl 조합으로 단 한 번에 그룹 집계
-            s_agg = hist_train.groupby([q_basis, 'SecAnl']).agg(
+            s_agg = hist_train.groupby([HQ, 'SecAnl']).agg(
                 sum_xy=('XY', 'sum'),
                 sum_x2=('X2', 'sum'),
                 row_cnt=('XY', 'count'),
@@ -1358,13 +1339,13 @@ class Enhanced_EPS(object):
             # 1단계에서 계산된 Analyst Slope를 적용한 뒤 다시 OLS 수행
             # ----------------------------------------------------------------
             # MultiIndex 매핑을 통해 가중치 적용 (.apply 제거)
-            hist_train['S_Slope'] = hist_train.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+            hist_train['S_Slope'] = hist_train.set_index([HQ, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
             hist_train['E_ROE_adj'] = hist_train['E_ROE'] * hist_train['S_Slope']
 
             hist_train['XY_adj'] = hist_train['E_ROE_adj'] * hist_train['A_ROE']
             hist_train['X2_adj'] = hist_train['E_ROE_adj'] ** 2
 
-            q_agg = hist_train.groupby(q_basis).agg(
+            q_agg = hist_train.groupby(HQ).agg(
                 sum_xy_adj=('XY_adj', 'sum'),
                 sum_x2_adj=('X2_adj', 'sum'),
                 nyear_q=('Year', 'nunique')
@@ -1379,8 +1360,10 @@ class Enhanced_EPS(object):
             # OPTIMIZATION 4: 현재 예측 대상 데이터(df)에 보정치 초고속 적용
             # ----------------------------------------------------------------
             # 1단계: Analyst 레벨 보정 (.apply 대신 .map 사용)
-        df['S_Slope'] = df.set_index([q_basis, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
-        df['E_ROE'] = df['E_ROE'] * df['S_Slope']
+        df['S_Slope'] = df.set_index([HQ, 'SecAnl']).index.map(s_slope_map).fillna(1.0)
+        # 2단계: Company 레벨 보정도 행마다 자기 QBtw의 기울기로 적용
+        df['Q_Slope'] = df[HQ].map(q_slope_map).fillna(1.0)
+        df['E_ROE'] = df['E_ROE'] * df['S_Slope'] * df['Q_Slope']
 
         # 후반부 모든 무거운 Groupby 연산을 단 1번으로 일괄 처리
         agg_df = df.groupby(q_basis).agg({
@@ -1394,11 +1377,8 @@ class Enhanced_EPS(object):
         if agg_df.empty:
             return pd.DataFrame()
 
-        # 2단계: Company 레벨 보정 (최종 데이터프레임 구축 과정에서 인라인 연산)
-        q_slopes = agg_df.index.map(lambda q: q_slope_map.get(q, 1.0))
-
         data = pd.DataFrame(index=agg_df.index)
-        data['Est'] = agg_df['E_ROE'] * q_slopes  # 별도의 apply_bam 함수 호출 없이 벡터 연산 처리
+        data['Est'] = agg_df['E_ROE']  # 1·2단계 보정이 행 단위로 이미 반영됨
         data['EW'] = agg_df['E_ROE_o']
         data['EW_prev'] = agg_df['A_EPS_1'] / agg_df['BPS']
         data['EQBtw'] = np.round(agg_df['EQBtw'])

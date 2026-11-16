@@ -1,6 +1,7 @@
 /backup/
 /korea/appendix/
 /korea/data/
-/result/
+/result/*
+!/result/consensus_dashboard/
 /data/korea/
 /src/config.ini
