@@ -237,6 +237,7 @@ def parse_args():
     parser.add_argument('-ey', '--end_year', default=2028, type=int, help='End year for EPS estimation')
     parser.add_argument('-sq', '--start_quarter', default=3, type=int, help='Start quarter for EPS estimation')
     parser.add_argument('-eq', '--end_quarter', default=2, type=int, help='End quarter for EPS estimation')
+    parser.add_argument('--list', default='./data/us/list_part.csv', help='constituent list (Code, Date); falls back to ./data/us/list_total.csv')
 
     return parser.parse_args()
 
@@ -252,7 +253,7 @@ if __name__ == '__main__':
 
     dl = DataDownloader()
     dl.open_session(app_key)
-    dl.read_list('./data/us/list_part.csv')
+    dl.read_list(args.list if os.path.exists(args.list) else './data/us/list_total.csv')
     dl.set_period('Q', args.start_year, args.end_year, startquarter=args.start_quarter, endquarter=args.end_quarter)
 
     dl.run(skip_existing=False)
